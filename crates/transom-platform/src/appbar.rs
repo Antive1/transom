@@ -1560,6 +1560,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_APPBAR => {
                 match wp.0 as u32 {
                     ABN_POSCHANGED => set_pos(raw, false),
+                    // prekrytie kapatka (cez celu obrazovku, takmer neviditelne) nie je aplikacia na celu obrazovku
+                    ABN_FULLSCREENAPP if lp.0 != 0 && crate::picker::active() => {}
                     ABN_FULLSCREENAPP => {
                         let opened = lp.0 != 0;
                         // oznamenie systemu preberie stav (nepotrebna dalsia vlastna kontrola tejto listy)

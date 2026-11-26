@@ -101,6 +101,7 @@ transom is native code drawing its own pixels – no browser engine, no .NET, no
 | Download | **3.5 MB** for the bar, 7.2 MB for all three programs; no runtime to install |
 | Drawing the whole 2560 px bar | **≈ 0.2 ms** per frame (0.24 ms at 150 %), ≈ 37 small allocations |
 | Redrawing just the island (equalizer, scrolling title) | **≈ 0.08 ms** per frame |
+| CPU while rain or snow falls on the weather item | **≈ 0.6 %** of one core (12 small frames a second; off with Windows animations off) |
 
 Animations (a scrolling title, the equalizer, panels opening) redraw only the part that moves. Not yet measured on the
 running bar: CPU while music plays – from the per-frame cost above it should stay well under 1 % of one core.
