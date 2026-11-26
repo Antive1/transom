@@ -2481,7 +2481,7 @@ mod tests {
                         if !name.starts_with("history-") && tab == Period::Month {
                             continue;
                         }
-                        let dpi = 144u32;
+                        let dpi = crate::gallery::hero_dpi();
                         let s = dpi as f32 / 96.0;
                         let (w, h) = (
                             (AI_W_LP as f32 * s).round() as i32,

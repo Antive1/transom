@@ -262,12 +262,17 @@ mod tests {
         let Some(dir) = crate::gallery::dir() else {
             return;
         };
-        let dpi = 144;
+        let dpi = crate::gallery::hero_dpi();
         let (w, h) = (
             crate::gallery::px(crate::extras::KIT_W_LP, dpi),
             crate::gallery::px(COLORS_H_LP, dpi),
         );
         let hist = [
+            (0xFF, 0xEC, 0xBE),
+            (0xB0, 0x56, 0x46),
+            (0x20, 0x22, 0x2A),
+            (0xE8, 0x8A, 0x5C),
+            (0x3B, 0x40, 0x47),
             (0x24, 0x1B, 0x3A),
             (0, 112, 224),
             (255, 255, 255),
@@ -292,6 +297,21 @@ mod tests {
                 &surf,
             );
         }
+        for (name, h_list, sel) in [
+            ("default", &hist[..5], Some(hist[0])),
+            ("empty", &hist[..0], None),
+        ] {
+            let mut kit = crate::pop_kit::Kit::default();
+            let r = rows(h_list, sel);
+            let (fw, rgba) = crate::gallery::glass_rgba_panel(
+                w,
+                h,
+                dpi,
+                &transom_render::Theme::dark(),
+                &mut |p, t| kit.paint(p, t, &r),
+            );
+            crate::gallery::save_rgba(&dir, &format!("colors-glass-{name}"), fw, h, &rgba);
+        }
         for (name, bar) in [
             ("blue", (0u8, 112u8, 224u8)),
             ("white", (255, 255, 255)),
@@ -314,6 +334,7 @@ mod tests {
                 8,
                 0,
                 Some(t),
+                0,
                 &mut |p, t| kit.paint(p, t, &r),
             );
             crate::gallery::save_rgba(&dir, &format!("colors-glass-{name}"), fw, h, &rgba);

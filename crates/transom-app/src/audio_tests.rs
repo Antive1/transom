@@ -595,6 +595,18 @@ fn gallery_audio() {
             }
         }
     }
+    // predvolene sklo (podklady promo videa)
+    let dpi = crate::gallery::hero_dpi();
+    let (w, h) = (
+        crate::gallery::px(AUDIO_W_LP, dpi),
+        crate::gallery::px(AUDIO_H_LP, dpi),
+    );
+    let mut p = AudioPanel::default();
+    let a = Arc::new(normal());
+    let (gw, rgba) = crate::gallery::glass_rgba_panel(w, h, dpi, &Theme::dark(), &mut |gp, t| {
+        p.paint(gp, t, &a, &all_quick())
+    });
+    crate::gallery::save_rgba(&dir, "audio-glass", gw, h, &rgba);
 }
 
 /// Pomocny test na pozretie vzhladu: `TRANSOM_PANEL_PNG=<adresar> cargo test -p transom-app panel_png -- --ignored`.

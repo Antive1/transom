@@ -750,6 +750,26 @@ mod tests {
                 }
             }
         }
+        // predvolene sklo (podklady promo videa)
+        let dpi = crate::gallery::hero_dpi();
+        let (w, h) = (
+            crate::gallery::px(LAUNCHER_W_LP, dpi),
+            crate::gallery::px(LAUNCHER_H_LP, dpi),
+        );
+        let mut p = LauncherPanel::default();
+        for c in "no".chars() {
+            p.ch(c);
+        }
+        p.set_results(p.generation, results.clone(), true);
+        p.hover = Some(2);
+        let (gw, rgba) = crate::gallery::glass_rgba_panel(
+            w,
+            h,
+            dpi,
+            &transom_render::Theme::dark(),
+            &mut |gp, t| p.paint_with(gp, t, Some(&Builtins)),
+        );
+        crate::gallery::save_rgba(&dir, "launcher-glass", gw, h, &rgba);
     }
 
     /// Falosny zdroj ikon: neparne riadky maju hotove pixely presnej velkosti (cervene), parne vstavanu ikonu; pocita volania.

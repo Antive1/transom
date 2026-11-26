@@ -565,12 +565,18 @@ fn paint_glass(hdc: HDC, kind: u32, dpi: u32, rc: RECT, st: &crate::glass::Glass
             }
         }
         if attached {
-            // horny lem obsahu (okraj panela) by pri liste vyzeral ako ciara: horne riadky su ciste sklo
+            // okraj obsahu (lem panela) by pri liste vyzeral ako ciara a na bokoch by presiel cez cierny nabeh az
+            // k liste: vsetky jeho riadky a stlpce su ciste sklo, obrys da len okraj skla (pri liste sa strati)
             let n = (dpi as i32 / 96).max(1);
+            let cw = fw - 2 * flare;
             // SAFETY: vlastne DC bufra.
             unsafe {
-                let _ = PatBlt(b.black_dc(), 0, 0, fw, n, BLACKNESS);
-                let _ = PatBlt(b.white_dc(), 0, 0, fw, n, WHITENESS);
+                for (dc, rop) in [(b.black_dc(), BLACKNESS), (b.white_dc(), WHITENESS)] {
+                    let _ = PatBlt(dc, 0, 0, fw, n, rop);
+                    let _ = PatBlt(dc, flare, 0, n, fh, rop);
+                    let _ = PatBlt(dc, flare + cw - n, 0, n, fh, rop);
+                    let _ = PatBlt(dc, flare, fh - n, cw, n, rop);
+                }
             }
         }
     }

@@ -112,8 +112,10 @@ Reproduce: `tools\cpu-sample.ps1 -Name transom-app -Seconds 30` for the running 
 ## Install
 
 1. Download **`transom-setup-<version>-x64.exe`** from the [releases](https://github.com/Antive1/transom/releases).
-2. Run it. It installs for your user only (no administrator rights) into `%LOCALAPPDATA%\Programs\transom` and can start
-   transom with Windows.
+2. Run it. Windows may show a blue **"Windows protected your PC"** (SmartScreen) window, because the installer is not code
+   signed yet and new apps have no download reputation. Click **More info → Run anyway**. The installer is built from the
+   tagged source by GitHub Actions; you can check it against `SHA256SUMS.txt` in the release. It installs for your user
+   only (no administrator rights) into `%LOCALAPPDATA%\Programs\transom` and can start transom with Windows.
 3. On the first start a **Welcome** page asks about the basics – start with Windows, the island, glass, AI usage (Claude
    Code, Codex), weather and updates. Everything can be changed later in Settings.
 4. Right-click an empty spot on the bar for the menu: **Settings**, **Customize bar**, **Hide bar**, **Quit**.

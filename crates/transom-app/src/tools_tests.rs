@@ -872,6 +872,26 @@ fn gallery_tools() {
             )));
         }
     }
+    // predvolene sklo (podklady promo videa): domov s dlazdicami a schranka
+    let dpi = crate::gallery::hero_dpi();
+    let (w, h) = (
+        crate::gallery::px(TOOLS_W_LP, dpi),
+        crate::gallery::px(TOOLS_H_LP, dpi),
+    );
+    for (name, sec) in [("home", None), ("clipboard", Some(Section::Clipboard))] {
+        let mut p = ToolsPanel::default();
+        if let Some(sec) = sec {
+            p.switch_for_test(sec);
+        }
+        let (gw, rgba) = crate::gallery::glass_rgba_panel(
+            w,
+            h,
+            dpi,
+            &transom_render::Theme::dark(),
+            &mut |gp, t| p.paint(gp, t, &d),
+        );
+        crate::gallery::save_rgba(&dir, &format!("tools-glass-{name}"), gw, h, &rgba);
+    }
 }
 
 fn long_data(n: usize) -> ToolsData {

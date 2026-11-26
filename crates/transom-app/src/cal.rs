@@ -406,27 +406,20 @@ mod tests {
         let Some(dir) = crate::gallery::dir() else {
             return;
         };
-        let dpi = 144;
+        let dpi = crate::gallery::hero_dpi();
         let (w, h) = (
             crate::gallery::px(CAL_W_LP, dpi),
             crate::gallery::px(CAL_H_LP, dpi),
         );
         for (dark, th) in crate::gallery::themes() {
             // panel: rohy 8 lp (ako `popup::paint_glass`)
-            let (_, rgba) = crate::gallery::glass_rgba(
-                w,
-                h,
-                dpi,
-                &th,
-                transom_platform::glass::Rim::All,
-                8,
-                0,
-                &mut |p, t| paint_fixture(p, t, Some(Ymd::new(2026, 11, 26))),
-            );
+            let (gw, rgba) = crate::gallery::glass_rgba_panel(w, h, dpi, &th, &mut |p, t| {
+                paint_fixture(p, t, Some(Ymd::new(2026, 11, 26)))
+            });
             crate::gallery::save_rgba(
                 &dir,
                 &format!("calendar-glass-{}-{dpi}", crate::gallery::tag(dark)),
-                w,
+                gw,
                 h,
                 &rgba,
             );
@@ -446,7 +439,7 @@ mod tests {
             transom_i18n::set_lang(lang);
             for dark in [true, false] {
                 let th = if dark { Theme::dark() } else { Theme::light() };
-                let dpi = 144u32;
+                let dpi = crate::gallery::hero_dpi();
                 let s = dpi as f32 / 96.0;
                 let (w, h) = (
                     (CAL_W_LP as f32 * s).round() as i32,

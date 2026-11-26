@@ -9,6 +9,15 @@ use transom_render::Theme;
 
 pub const DPIS: [u32; 3] = [96, 144, 192];
 
+/// DPI galerii, ktore sa kreslia v jednej velkosti (sklo, ostrov): `TRANSOM_GALLERY_DPI`, inak 144 (150 %).
+pub fn hero_dpi() -> u32 {
+    std::env::var("TRANSOM_GALLERY_DPI")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|d| (96..=480).contains(d))
+        .unwrap_or(144)
+}
+
 /// Cielovy priecinok (`None` = galeria sa nevytvara). `TRANSOM_GALLERY_FONT=classic` vykresli galeriu zaloznym pismom
 /// (Segoe UI), ako na stroji bez Segoe UI Variable.
 pub fn dir() -> Option<PathBuf> {
@@ -66,7 +75,30 @@ pub fn glass_rgba(
     flare_lp: i32,
     paint: &mut dyn FnMut(&mut dyn transom_render::Painter, &Theme),
 ) -> (i32, Vec<u8>) {
-    glass_rgba_tinted(w, h, dpi, th, rim, corner_lp, flare_lp, None, paint)
+    glass_rgba_tinted(w, h, dpi, th, rim, corner_lp, flare_lp, None, 0, paint)
+}
+
+/// Panel pripojeny k liste presne ako v aplikacii (`popup::paint_glass` + `App::popover_glass`): pripojeny okraj,
+/// rohy 8 lp, vyduty prechod do listy 10 lp, nabeh z ciernej listy 120 lp a krytie skla 88 % (predvolene).
+pub fn glass_rgba_panel(
+    w: i32,
+    h: i32,
+    dpi: u32,
+    th: &Theme,
+    paint: &mut dyn FnMut(&mut dyn transom_render::Painter, &Theme),
+) -> (i32, Vec<u8>) {
+    glass_rgba_tinted(
+        w,
+        h,
+        dpi,
+        th,
+        transom_platform::glass::Rim::Attached,
+        8,
+        10,
+        None,
+        120,
+        paint,
+    )
 }
 
 /// Ako [`glass_rgba`], so sklom vo vlastnej farbe listy (`glass::tint_for`).
@@ -80,6 +112,7 @@ pub fn glass_rgba_tinted(
     corner_lp: i32,
     flare_lp: i32,
     tint: Option<transom_platform::glass::Tinted>,
+    lead_lp: i32,
     paint: &mut dyn FnMut(&mut dyn transom_render::Painter, &Theme),
 ) -> (i32, Vec<u8>) {
     use transom_platform::glass::Rim;
@@ -107,11 +140,14 @@ pub fn glass_rgba_tinted(
             if attached {
                 // horny lem obsahu by pri liste vyzeral ako ciara: horne riadky su ciste sklo (ako v aplikacii)
                 let n = (dpi as i32 / 96).max(1);
-                transom_render::Painter::fill_rect(
-                    &mut p,
+                for r in [
                     transom_render::Rect::new(0, 0, fw, n),
-                    bg,
-                );
+                    transom_render::Rect::new(fl, 0, n, h),
+                    transom_render::Rect::new(fl + w - n, 0, n, h),
+                    transom_render::Rect::new(fl, h - n, w, n),
+                ] {
+                    transom_render::Painter::fill_rect(&mut p, r, bg);
+                }
             }
         }
         surf.rgb()
@@ -131,6 +167,17 @@ pub fn glass_rgba_tinted(
     if let Some(t) = tint {
         st.tint = t.tint;
         st.tint_alpha = t.alpha;
+    }
+    if lead_lp > 0 {
+        // panel pod ciernou listou: nabeh z jej farby a predvolene krytie skla (88 %)
+        st.tint_alpha = (88 * 255 / 100) as u8;
+        let fg = th.foreground;
+        st.lead = Some(transom_platform::glass::Lead {
+            color: (0, 0, 0),
+            alpha: 255,
+            px: lead_lp * dpi as i32 / 96,
+            text: (fg.r, fg.g, fg.b),
+        });
     }
     let mut out = vec![0u32; (fw * h) as usize];
     transom_platform::glass::compose(
@@ -501,7 +548,7 @@ mod tests {
             }
             v
         };
-        for dpi in [144u32] {
+        for dpi in [hero_dpi()] {
             for (dark, th) in themes() {
                 for (name, code, phase, bat) in &cases {
                     let w = crate::weather::Weather {
@@ -528,6 +575,249 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Podklady promo videa: plna cierna lista v stavoch ostrova a so snimkami dazda a snehu, menu ostrova s casovou
+    /// osou skladby (priebeh aj presun jazdcom) a AI limity na predvolenom skle. Vsetko pri `TRANSOM_GALLERY_DPI`,
+    /// len vymyslene data.
+    #[test]
+    #[ignore]
+    fn gallery_promo() {
+        use crate::island_menu::{IslandMenu, Limit, Tab};
+        use transom_core::item::{Action, AiLogo, Mark, Part, Seg, Side, StatusItem};
+        use transom_platform::glass::Rim;
+        let _g = crate::test_lang::guard();
+        let Some(dir) = dir() else { return };
+        let dpi = hero_dpi();
+        let mut img = Image::solid(64, 64, 0);
+        for y in 0..64u32 {
+            for x in 0..64u32 {
+                img.px[(y * 64 + x) as usize] =
+                    0xFF00_0000 | (x * 4) << 16 | 0x50 << 8 | (200 - y * 2);
+            }
+        }
+        let art = ArtImage {
+            id: 7,
+            image: Arc::new(img),
+        };
+        const T: i64 = 10_000_000;
+        let media_at = |pos_s: i64| SessionInfo {
+            key: "Spotify.exe".into(),
+            title: "Midnight City".into(),
+            artist: "M83".into(),
+            state: PlayState::Playing,
+            controls: Controls {
+                pause: true,
+                prev: true,
+                next: true,
+                toggle: true,
+                seek: true,
+                ..Default::default()
+            },
+            timeline: transom_core::media::Timeline {
+                start: 0,
+                end: 243 * T,
+                position: pos_s * T,
+                last_updated: transom_core::media::now_filetime(),
+            },
+            ..Default::default()
+        };
+        let media = media_at(62);
+        let ring = RingView {
+            fill: Some(7),
+            ccw: false,
+            muted: false,
+            label: "7 % used".into(),
+            name: String::new(),
+            alert: false,
+            detail: Some("Claude · 5 h · resets in 3 h 35 min".into()),
+        };
+        let audio = AudioView {
+            glyph: Glyph::Volume2,
+            name: String::new(),
+        };
+        let bar_th = Theme::dark().for_bar(Some(Color::rgb(0, 0, 0)), 255);
+        let claude = |t: &str| Seg::Logo {
+            logo: AiLogo::Claude,
+            text: t.into(),
+            low: false,
+            dot: Some((156, 213, 254)),
+        };
+        let text = |t: &str, muted: bool| Seg::Text {
+            text: t.into(),
+            muted,
+            strong: false,
+            low: false,
+            scroll: None,
+        };
+        let islands: Vec<(&str, Seg, Seg)> = vec![
+            ("idle", Seg::None, Seg::None),
+            (
+                "music",
+                Seg::Art(Some(art.clone())),
+                Seg::Eq {
+                    levels: [110, 190, 140, 230, 90],
+                    color: Some((236, 72, 153)),
+                    playing: true,
+                },
+            ),
+            ("ai", claude(""), text("7 % used · 5 h", false)),
+        ];
+        let (w, h) = (px(1440, dpi), px(28, dpi));
+        let bar = |name: String, island: &(&str, Seg, Seg), wx: (u32, u8), bat: (u8, bool)| {
+            let w_snap = crate::weather::Weather {
+                place: "Test".into(),
+                temp: -2.0,
+                code: wx.0,
+                days: Vec::new(),
+            };
+            let b = Battery {
+                percent: Some(bat.0),
+                charging: bat.1,
+                on_ac: bat.1,
+                saver: false,
+            };
+            let view = View {
+                clock: "26.11.2026 17:25",
+                battery: Some(b),
+                media: Some(&media),
+                art: Some(art.clone()),
+                ai: Some(&ring),
+                audio: Some(&audio),
+                weather: Some(&w_snap),
+                weather_phase: wx.1,
+                ..Default::default()
+            };
+            let mut layout = transom_config::Layout::default();
+            for id in ["audio", "ai", "weather", "tool_picker", "battery"] {
+                layout.set_visible(id, true);
+            }
+            let mut items = arrange(build_items(&view), &layout);
+            let isl = StatusItem::new(
+                ItemId::Shelf,
+                Side::Center,
+                vec![Part::Island {
+                    left: island.1.clone(),
+                    mark: Mark::Transom,
+                    label: "transom".into(),
+                    badge: String::new(),
+                    right: island.2.clone(),
+                    name: "island".into(),
+                    action: Some(Action::Island),
+                }],
+            );
+            match items.iter_mut().find(|i| i.id == ItemId::Shelf) {
+                Some(it) => *it = isl,
+                None => items.push(isl),
+            }
+            let surf = Surface::new(w, h);
+            {
+                let mut p = GdiPainter::new(surf.dc, Size { w, h }, dpi);
+                let _ = render_bar_with(&mut p, &bar_th, &items, Interaction::default(), None);
+            }
+            save(&dir, &name, &surf);
+        };
+        for isl in &islands {
+            bar(format!("promo-bar-{}", isl.0), isl, (63, 0), (64, true));
+        }
+        for f in 0..12u8 {
+            bar(
+                format!("promo-rain-{f:02}"),
+                &islands[0],
+                (63, f * 3),
+                (64, true),
+            );
+            bar(
+                format!("promo-snow-{f:02}"),
+                &islands[0],
+                (73, f * 3),
+                (14, false),
+            );
+        }
+        // menu ostrova: hudba s casovou osou (priebeh, potom presun jazdcom) a AI limity, na predvolenom skle
+        let th = Theme::dark();
+        let tabs = vec![Tab::Music, Tab::Clipboard, Tab::Shots, Tab::Ai, Tab::Files];
+        let (mw, mh) = (
+            px(transom_platform::dragdrop::NOTCH_W_LP, dpi),
+            px(crate::island_menu::height_lp(Some(Tab::Music)), dpi),
+        );
+        let positions: Vec<(i64, bool)> = (0..10)
+            .map(|k| (62 + k, false))
+            .chain((0..10).map(|k| (72 + k * 9, true)))
+            .collect();
+        for (k, (pos, drag)) in positions.iter().enumerate() {
+            let info = media_at(*pos);
+            let (gw, rgba) = glass_rgba_tinted(
+                mw,
+                mh,
+                dpi,
+                &th,
+                Rim::Attached,
+                14,
+                10,
+                None,
+                120,
+                &mut |p, t| {
+                    let mut m = IslandMenu::default();
+                    m.open(tabs.clone(), Tab::Music);
+                    let area = m.paint_frame(p, t);
+                    let mut sub = transom_render::painter::Sub {
+                        inner: p,
+                        dx: area.x,
+                        dy: area.y,
+                        size: Size {
+                            w: area.w,
+                            h: area.h,
+                        },
+                    };
+                    let mut n = crate::media_notch::MediaNotch::default();
+                    if *drag {
+                        n.hover = Some(crate::media_notch::Hit::Seek);
+                    }
+                    n.paint(&mut sub, t, &info, Some(&art));
+                },
+            );
+            save_rgba(&dir, &format!("promo-music-{k:02}"), gw, mh, &rgba);
+        }
+        let mh = px(crate::island_menu::height_lp(Some(Tab::Ai)), dpi);
+        let (gw, rgba) = glass_rgba_tinted(
+            mw,
+            mh,
+            dpi,
+            &th,
+            Rim::Attached,
+            14,
+            10,
+            None,
+            120,
+            &mut |p, t| {
+                let mut m = IslandMenu::default();
+                m.open(tabs.clone(), Tab::Ai);
+                m.limits = vec![
+                    Limit {
+                        window: "Claude · 5 h".into(),
+                        used: 7,
+                        detail: "resets in 3 h 35 min".into(),
+                        low: false,
+                    },
+                    Limit {
+                        window: "Claude · week".into(),
+                        used: 77,
+                        detail: "resets in 3 d 4 h".into(),
+                        low: false,
+                    },
+                    Limit {
+                        window: "Codex · month".into(),
+                        used: 41,
+                        detail: "resets in 19 d 5 h".into(),
+                        low: false,
+                    },
+                ];
+                let area = m.paint_frame(p, t);
+                m.paint_ai(p, t, area);
+            },
+        );
+        save_rgba(&dir, "promo-ai", gw, mh, &rgba);
     }
 
     /// Ostrov v strede listy vo vsetkych stavoch (pokoj s logom, nova skladba, hudba, AI pracuje, hudba + AI,
@@ -639,7 +929,7 @@ mod tests {
                 text("Click to open", true),
             ),
         ];
-        let dpi = 144;
+        let dpi = hero_dpi();
         let (w, h) = (px(1180, dpi), px(28, dpi));
         for (state, left, right) in &states {
             let mut items = base.clone();
