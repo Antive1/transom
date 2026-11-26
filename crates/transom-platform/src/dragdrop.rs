@@ -216,21 +216,46 @@ unsafe extern "system" fn drag_event(
             SetTimer(Some(hwnd), T_NEAR, 30, None);
         }
     } else {
-        let (_, opened) = NEAR.with(|n| n.replace((false, false)));
-        // SAFETY: casovac vlastneho okna.
-        unsafe {
-            let _ = KillTimer(Some(hwnd), T_NEAR);
-        }
-        // vysunuty len priblizenim a nic sa nepustilo: zbalit (ak nad nim nie je mys)
-        if opened && NOTCH.with(|n| n.borrow().as_ref().is_some_and(|s| !s.browse)) {
-            notch_leave();
-        }
+        drag_finished(hwnd);
+    }
+}
+
+/// Koniec tahania v systeme: vybezok vysunuty len priblizenim (nic sa nan nepustilo) sa zbali.
+fn drag_finished(hwnd: HWND) {
+    let (active, opened) = NEAR.with(|n| n.replace((false, false)));
+    // SAFETY: casovac vlastneho okna.
+    unsafe {
+        let _ = KillTimer(Some(hwnd), T_NEAR);
+    }
+    if active && opened && NOTCH.with(|n| n.borrow().as_ref().is_some_and(|s| !s.browse)) {
+        notch_leave();
+    }
+}
+
+/// Je stlacene niektore tlacidlo mysi (fyzicky stav)? Tahanie OLE trva, kym sa tlacidlo nepusti.
+fn mouse_button_down() -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON};
+    // SAFETY: citanie stavu klavesu, bez vedlajsich ucinkov.
+    unsafe {
+        (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0
+            || (GetAsyncKeyState(VK_RBUTTON.0 as i32) as u16 & 0x8000) != 0
     }
 }
 
 /// Pocas tahania: kurzor blizko stredu pod listou (do ~150 lp pod nou, +-320 lp od stredu) vysunie vybezok.
 fn near_tick() {
-    if !NEAR.with(|n| n.get().0) || dragging() {
+    if !NEAR.with(|n| n.get().0) {
+        return;
+    }
+    // koniec tahania bez udalosti EVENT_SYSTEM_DRAGDROPEND: niektore aplikacie (prehliadace na Chromiu) ju pri vlastnom
+    // tahani neposlu - vybezok by inak ostal vysunuty aj so suborom. Tlacidla mysi su pustene = tahanie skoncilo.
+    if !mouse_button_down() {
+        if let Some(hwnd) = NOTCH.with(|n| n.borrow().as_ref().map(|s| s.hwnd)) {
+            drag_finished(hwnd);
+        }
+        return;
+    }
+    if dragging() {
         return;
     }
     let mut pt = POINT::default();

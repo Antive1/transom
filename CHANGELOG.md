@@ -20,6 +20,8 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 - Panels could flash for a moment while opening.
 - After skipping a song the new title and cover could take long to appear (Spotify reports them late; transom now
   reads them again shortly after the change).
+- Dragging something to the top of the screen over a browser left the file drop area open; it now closes when the drag
+  ends, also when the app you drag from does not report the end (Chromium browsers).
 - The Welcome page now really opens on the first start.
 
 ## [0.1.1] - 2026-11-26
