@@ -810,10 +810,12 @@ impl App {
         if before.tools.launcher != self.config.tools.launcher {
             self.sync_hotkey();
         }
-        if before.layout != self.config.layout {
+        let layouts_changed =
+            before.layout != self.config.layout || before.monitors != self.config.monitors;
+        if layouts_changed {
             self.sync_audio();
         }
-        if before.layout != self.config.layout || before.peripherals != self.config.peripherals {
+        if layouts_changed || before.peripherals != self.config.peripherals {
             self.sync_periph();
             invalidate_all();
             popup::invalidate_popover();
@@ -848,7 +850,7 @@ impl App {
             self.sync_shift();
             invalidate_all();
         }
-        if before.appearance != self.config.appearance {
+        if before.appearance != self.config.appearance || before.monitors != self.config.monitors {
             // alfa < 255 prepne okna na vrstveny rezim, 255 spat na ClearType (rozhoduje platforma pri kresleni)
             log(&format!(
                 "vzhlad pozadia: farba={:?} alfa={}",
@@ -1066,17 +1068,40 @@ impl App {
     /// Cierne sklo pod panelmi a menu (`bar = false`) alebo pod listou (`bar = true`) podla nastaveni vzhladu; nie pri
     /// ochrane OLED s ciernym pozadim, vysokom kontraste ani vypnutych efektoch priehladnosti.
     fn glass_on(&self, bar: bool) -> bool {
-        let a = &self.config.appearance;
-        (if bar { a.glass_bar } else { a.glass_panels })
+        if bar {
+            return self.glass_bar_on(None);
+        }
+        self.config.appearance.glass_panels
             && !self.config.oled.black_bg()
             && transom_platform::glass::system_allows_cached()
+    }
+
+    /// Vzhlad lisaty monitora `m` (vlastny, ak ho monitor ma); `None` = spolocny.
+    fn look(&self, m: Option<&str>) -> &transom_config::Appearance {
+        match m {
+            Some(m) => self.config.appearance_for(m),
+            None => &self.config.appearance,
+        }
+    }
+
+    /// Sklo pod listou monitora `m`.
+    fn glass_bar_on(&self, m: Option<&str>) -> bool {
+        self.look(m).glass_bar
+            && !self.config.oled.black_bg()
+            && transom_platform::glass::system_allows_cached()
+    }
+
+    /// Monitor, pod ktorym je otvoreny panel (jeho lista urcuje farbu skla panelov).
+    fn panel_monitor(&self) -> Option<&str> {
+        self.popover_monitor.as_deref()
     }
 
     /// Farba, ktorou zacinaju panely pod listou: farba lisaty; pri priehladnej liste (pod nou je hlavne plocha) farba
     /// temy, aby panel nezacinal napr. bielou z "uplne priehladnej bielej".
     fn bar_lead_color(&self) -> (u8, u8, u8) {
-        let alpha = self.config.appearance.effective(&self.config.oled).1;
-        let bar = self.bar_theme().background;
+        let m = self.panel_monitor();
+        let alpha = self.look(m).effective(&self.config.oled).1;
+        let bar = self.bar_theme_on(m).background;
         // farba lisaty len ak je na nej text panela citatelny
         let th = self.panel_theme();
         let c = if alpha >= 128 && transom_render::audit::ratio(bar, th.foreground) >= 4.5 {
@@ -1087,11 +1112,16 @@ impl App {
         (c.r, c.g, c.b)
     }
 
-    /// Sklo s vlastnou farbou listy (ak je nastavena): jej odtien, vzhlad (tmave / svetle sklo) podla farby a krytie
-    /// zvysene natolko, aby tlmeny text ostal citatelny nad lubovolnou strankou pod sklom. Bez vlastnej farby `None`.
-    fn glass_tint(&self, alpha: u8) -> Option<transom_platform::glass::Tinted> {
-        let c = self.config.appearance.color()?;
+    /// Sklo s vlastnou farbou listy monitora `m` (ak je nastavena): jej odtien, vzhlad (tmave / svetle sklo) podla
+    /// farby a krytie zvysene natolko, aby text ostal citatelny nad lubovolnou strankou pod sklom. Bez farby `None`.
+    fn glass_tint_on(&self, m: Option<&str>, alpha: u8) -> Option<transom_platform::glass::Tinted> {
+        let c = self.look(m).color()?;
         Some(transom_platform::glass::tint_for(c, alpha))
+    }
+
+    /// Sklo panelov: farba listy monitora, pod ktorym je panel.
+    fn glass_tint(&self, alpha: u8) -> Option<transom_platform::glass::Tinted> {
+        self.glass_tint_on(self.panel_monitor(), alpha)
     }
 
     /// Nepriehladnost skla panelov podla nastavenia (Pozadie -> Priehladnost panelov).
@@ -1112,30 +1142,25 @@ impl App {
         }
     }
 
-    /// Text listy sa prisposobuje tomu, co je pod nou (len pri automatickom texte a lište prevazne priehladnej, bez skla).
-    fn under_adapts(&self) -> bool {
-        let (_, alpha) = self.config.appearance.effective(&self.config.oled);
+    /// Text listy monitora `m` sa prisposobuje tomu, co je pod nou (len pri automatickom texte a liste prevazne
+    /// priehladnej, bez skla).
+    fn under_adapts(&self, m: Option<&str>) -> bool {
+        let (_, alpha) = self.look(m).effective(&self.config.oled);
         alpha < 128
-            && !self.glass_on(true)
-            && matches!(
-                self.config.appearance.text(),
-                transom_config::TextChoice::Auto
-            )
+            && !self.glass_bar_on(m)
+            && matches!(self.look(m).text(), transom_config::TextChoice::Auto)
     }
 
     /// Odmeria farbu pod priehladnou listou na kazdom monitore; pri zmene prekresli.
     fn sample_under(&mut self) {
         self.under_at = Some(Instant::now());
-        if !self.under_adapts() {
-            if !self.under.is_empty() {
-                self.under.clear();
-                invalidate_all();
-            }
-            return;
-        }
         let mut changed = false;
         let ids: Vec<String> = self.layouts.keys().cloned().collect();
         for m in ids {
+            if !self.under_adapts(Some(&m)) {
+                changed |= self.under.remove(&m).is_some();
+                continue;
+            }
             if self.hidden_bars.contains(&m) {
                 continue;
             }
@@ -1163,26 +1188,23 @@ impl App {
         }
     }
 
-    fn bar_theme(&self) -> Theme {
-        self.bar_theme_on(None)
-    }
-
-    /// Tema listy monitora `monitor` (pri priehladnej liste s textom podla farby pod nou).
+    /// Tema listy monitora `monitor` (jeho vzhlad; pri priehladnej liste s textom podla farby pod nou).
     fn bar_theme_on(&self, monitor: Option<&str>) -> Theme {
-        let (bg, alpha) = self.config.appearance.effective(&self.config.oled);
+        let look = self.look(monitor);
+        let (bg, alpha) = look.effective(&self.config.oled);
         // sklo pod listou ma nadych temy (nie vlastnu farbu): text sa riadi temou, inak by svetla vlastna farba dala
         // tmavy text na ciernom skle
-        let bg = if self.glass_on(true) { None } else { bg };
+        let glass = self.glass_bar_on(monitor);
+        let bg = if glass { None } else { bg };
         // sklenena lista s vlastnou farbou: text podla farby skla (svetle sklo = tmavy text)
-        let base = match self
-            .glass_on(true)
-            .then(|| self.glass_tint(transom_platform::glass::DARK_TINT_ALPHA))
+        let base = match glass
+            .then(|| self.glass_tint_on(monitor, transom_platform::glass::DARK_TINT_ALPHA))
             .flatten()
         {
             Some(t) if t.dark != self.theme.dark => flip_theme(t.dark),
             _ => self.theme,
         };
-        let text = match self.config.appearance.text() {
+        let text = match look.text() {
             transom_config::TextChoice::Auto => transom_render::BarText::Auto,
             transom_config::TextChoice::Light => transom_render::BarText::Light,
             transom_config::TextChoice::Dark => transom_render::BarText::Dark,
@@ -1195,7 +1217,7 @@ impl App {
             .with_text(text);
         // priehladna lista: text citatelny na tom, co je pod nou (svetla plocha = tmavy text); pozadie ostava
         if let Some(&(r, g, b)) = monitor
-            .filter(|_| self.under_adapts())
+            .filter(|m| self.under_adapts(Some(m)))
             .and_then(|m| self.under.get(m))
         {
             let keep = th.background;
@@ -1241,7 +1263,13 @@ impl App {
         })
     }
 
-    fn items(&self) -> Vec<StatusItem> {
+    /// Polozky lisaty monitora `monitor` (jeho vlastne rozlozenie, ak ho ma).
+    fn items_for(&self, monitor: &str) -> Vec<StatusItem> {
+        view::arrange(self.raw_items(), self.config.layout_for(monitor))
+    }
+
+    /// Vsetky polozky s obsahom (bez rozlozenia): na porovnanie, ci sa zmenil zobrazeny obsah na niektorom monitore.
+    fn raw_items(&self) -> Vec<StatusItem> {
         let media = self.chosen_session();
         // kruh sa pocita z casu: po resete okna (minutovy tik) sa hodnota sama zmeni na "nedostupne"
         let ring = ai::ring_view(self.ai.data.as_ref(), &self.config.usage, ai::now_unix());
@@ -1303,16 +1331,12 @@ impl App {
         if let Some(it) = items.iter_mut().find(|i| i.id == ItemId::Shelf) {
             it.parts = vec![self.island_part()];
         }
-        view::arrange(items, &self.config.layout)
+        items
     }
 
     /// Je polozka `id` viditelna v rozlozeni?
     fn item_visible(&self, id: &str) -> bool {
-        self.config
-            .layout
-            .items
-            .iter()
-            .any(|s| s.id == id && s.visible)
+        self.config.visible_anywhere(id)
     }
 
     /// Klavesnica: precita stav a naplanuje dalsie citanie, kym je polozka viditelna (lacne volania, bez haku).
@@ -1839,9 +1863,9 @@ impl App {
 
     /// Vykona zmenu stavu a prekresli len vtedy, ak sa zmenil zobrazeny obsah.
     fn update(&mut self, why: &str, f: impl FnOnce(&mut Self)) {
-        let before = self.items();
+        let before = self.raw_items();
         f(self);
-        if self.items() != before {
+        if self.raw_items() != before {
             log(&format!("zmena obsahu ({why}) -> prekreslit"));
             invalidate_all();
         }
@@ -3301,15 +3325,23 @@ impl App {
                     .take()
                     .filter(|d| d.moved && d.monitor == monitor_id)
                 {
-                    let items = self.items();
+                    let items = self.items_for(monitor_id);
                     let placed = self.layouts.get(monitor_id).cloned().unwrap_or_default();
                     let w = self.bar_width(monitor_id);
-                    let locked = self.config.center_locked();
+                    let locked = self
+                        .config
+                        .layout_for(monitor_id)
+                        .items
+                        .iter()
+                        .any(|s| s.id == "shelf" && s.visible);
                     let target = bar_edit::drop_target(&placed, &items, w, d.id, x, locked);
                     if let (Some((g, before, _)), Some(id)) = (target, bar_edit::config_id(d.id)) {
                         let before = before.and_then(bar_edit::config_id);
                         log(&format!("uprava lisaty: {id} -> {g:?} pred {before:?}"));
-                        self.save_config_with(|c| c.layout.move_before(&id, g, before.as_deref()));
+                        let m = monitor_id.to_string();
+                        self.save_config_with(|c| {
+                            c.layout_for_mut(&m).move_before(&id, g, before.as_deref())
+                        });
                         popup::invalidate_popover();
                     }
                 }
@@ -3340,7 +3372,7 @@ impl App {
             PointerKind::Leave => None,
             _ => self.layouts.get(monitor_id).and_then(|l| hit_test(l, x)),
         };
-        let items = self.items();
+        let items = self.items_for(monitor_id);
         let action = hit.and_then(|(id, part)| {
             items
                 .iter()
@@ -4464,7 +4496,7 @@ impl BarHandler for App {
             }
             // pripojene vyrastaju z listy: hore zacinaju jej plnou farbou a plynulo prejdu do skla (sklenena lista
             // uz je tym istym sklom)
-            if attached && !self.glass_on(true) {
+            if attached && !self.glass_bar_on(self.panel_monitor()) {
                 // farbu spresni okno podla skutocnej farby listy na obrazovke; dlhy plynuly nabeh = "vysunute z listy"
                 let fg = th.foreground;
                 st.lead = Some(Lead {
@@ -4493,16 +4525,17 @@ impl BarHandler for App {
         Some(m.size)
     }
 
-    fn appearance(&self) -> BarAppearance {
-        let th = self.bar_theme();
+    fn appearance(&self, monitor_id: &str) -> BarAppearance {
+        let m = Some(monitor_id);
+        let th = self.bar_theme_on(m);
         let bg = th.background;
         BarAppearance {
-            alpha: self.config.appearance.effective(&self.config.oled).1,
+            alpha: self.look(m).effective(&self.config.oled).1,
             bg: (bg.r, bg.g, bg.b),
             // sklo berie nadych z temy, nie z vlastnej farby listy (napr. "uplne priehladna biela" by dala biele sklo
             // pod svetlym textom)
-            glass: self.glass_on(true).then(|| {
-                let tinted = self.glass_tint(transom_platform::glass::DARK_TINT_ALPHA);
+            glass: self.glass_bar_on(m).then(|| {
+                let tinted = self.glass_tint_on(m, transom_platform::glass::DARK_TINT_ALPHA);
                 let dark = tinted.map_or(self.theme.dark, |t| t.dark);
                 let t = flip_theme(dark).background;
                 let mut st = transom_platform::glass::GlassStyle::for_theme(
@@ -4531,7 +4564,7 @@ impl BarHandler for App {
             ctx.dpi,
         )
         .grayscale(ctx.grayscale);
-        let items = self.items();
+        let items = self.items_for(&ctx.monitor_id);
         let on_this = |v: &Option<(String, ItemId, usize)>| {
             v.as_ref()
                 .filter(|(m, _, _)| m == &ctx.monitor_id)

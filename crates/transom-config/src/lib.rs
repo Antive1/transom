@@ -1829,6 +1829,42 @@ impl Default for Displays {
 /// Najvyssi pocet ulozenych monitorov.
 pub const MAX_DISPLAY_REFS: usize = 16;
 
+/// Vlastne nastavenia jedneho monitora (stabilne ID ako v `displays.selected`; nikdy sa ticho neprenesu na iny
+/// monitor). `None` = ta cast sa berie zo spolocnych nastaveni.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MonitorOverride {
+    pub id: String,
+    /// Posledny znamy popis (na zobrazenie, ked monitor nie je pripojeny).
+    #[serde(default)]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<Layout>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<Appearance>,
+}
+
+/// Tolerantne: neplatne zaznamy (zly typ, prazdne ID) a duplicity sa vynechaju, najviac `MAX_DISPLAY_REFS`.
+fn de_monitors<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<MonitorOverride>, D::Error> {
+    let Value::Array(items) = Value::deserialize(d)? else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<MonitorOverride> = Vec::new();
+    for v in items {
+        if let Ok(mut m) = serde_json::from_value::<MonitorOverride>(v) {
+            if !m.id.trim().is_empty() && !out.iter().any(|o| o.id.eq_ignore_ascii_case(&m.id)) {
+                if let Some(l) = &mut m.layout {
+                    l.normalize();
+                }
+                out.push(m);
+            }
+        }
+        if out.len() >= MAX_DISPLAY_REFS {
+            break;
+        }
+    }
+    Ok(out)
+}
+
 fn de_display_mode<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
     Ok(match Value::deserialize(d)? {
         Value::String(s) if ["all", "primary", "selected"].contains(&s.as_str()) => s,
@@ -1919,6 +1955,10 @@ pub struct Config {
     /// Na ktorych monitoroch je lista.
     #[serde(default)]
     pub displays: Displays,
+    /// Vlastne nastavenia jednotlivych monitorov (polozky a vzhlad lisaty); monitor bez zaznamu pouziva spolocne.
+    /// Neexportuju sa (ID monitora plati len na tomto PC).
+    #[serde(default, deserialize_with = "de_monitors")]
+    pub monitors: Vec<MonitorOverride>,
     /// Aktualizacie: lista sa pozera na nove vydania na GitHube (predvolene zapnute, da sa vypnut). Neexportuje sa.
     #[serde(default)]
     pub updates: Updates,
@@ -2001,10 +2041,66 @@ impl Config {
     }
 
     pub fn enforce_center(&mut self) {
-        if !self.center_locked() {
+        self.layout.enforce_center();
+        for m in &mut self.monitors {
+            if let Some(l) = &mut m.layout {
+                l.enforce_center();
+            }
+        }
+    }
+
+    /// Rozlozenie lisaty na monitore `id`: vlastne, ak ho monitor ma, inak spolocne.
+    pub fn layout_for(&self, id: &str) -> &Layout {
+        self.monitor(id)
+            .and_then(|m| m.layout.as_ref())
+            .unwrap_or(&self.layout)
+    }
+
+    /// Vzhlad lisaty na monitore `id`: vlastny, ak ho monitor ma, inak spolocny.
+    pub fn appearance_for(&self, id: &str) -> &Appearance {
+        self.monitor(id)
+            .and_then(|m| m.appearance.as_ref())
+            .unwrap_or(&self.appearance)
+    }
+
+    /// Vlastne nastavenia monitora `id` (porovnanie ID bez ohladu na velkost pismen).
+    pub fn monitor(&self, id: &str) -> Option<&MonitorOverride> {
+        self.monitors.iter().find(|m| m.id.eq_ignore_ascii_case(id))
+    }
+
+    /// Rozlozenie, ktore sa upravuje pre monitor `id` (vlastne, ak ho monitor ma, inak spolocne).
+    pub fn layout_for_mut(&mut self, id: &str) -> &mut Layout {
+        match self
+            .monitors
+            .iter()
+            .position(|m| m.id.eq_ignore_ascii_case(id) && m.layout.is_some())
+        {
+            Some(i) => self.monitors[i].layout.as_mut().expect("layout"),
+            None => &mut self.layout,
+        }
+    }
+
+    /// Je polozka `id` zobrazena aspon na jednom monitore (spolocne rozlozenie alebo vlastne niektoreho monitora)?
+    pub fn visible_anywhere(&self, id: &str) -> bool {
+        std::iter::once(&self.layout)
+            .chain(self.monitors.iter().filter_map(|m| m.layout.as_ref()))
+            .any(|l| l.items.iter().any(|s| s.id == id && s.visible))
+    }
+
+    pub fn monitor_mut(&mut self, id: &str) -> Option<&mut MonitorOverride> {
+        self.monitors
+            .iter_mut()
+            .find(|m| m.id.eq_ignore_ascii_case(id))
+    }
+}
+
+impl Layout {
+    /// Pravidlo stredu pre toto rozlozenie (pozri `Config::enforce_center`).
+    pub fn enforce_center(&mut self) {
+        if !self.items.iter().any(|s| s.id == "shelf" && s.visible) {
             return;
         }
-        let items = &mut self.layout.items;
+        let items = &mut self.items;
         items.retain(|s| !(s.group == Group::Center && separator_no(&s.id).is_some()));
         let moved: Vec<Slot> = items
             .iter()
@@ -2054,6 +2150,7 @@ impl Default for Config {
             weather_places: Vec::new(),
             weather_source: WeatherSource::None,
             displays: Displays::default(),
+            monitors: Vec::new(),
             updates: Updates::default(),
             language: system_language(),
             extra: Map::new(),
@@ -3988,5 +4085,55 @@ mod extras_cfg_tests {
                 "{id}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod monitor_tests {
+    use super::*;
+
+    #[test]
+    fn a_monitor_uses_its_own_layout_and_appearance_or_the_common_ones() {
+        let mut c = Config::default();
+        let mut own = c.layout.clone();
+        own.set_visible("weather", true);
+        let look = Appearance {
+            bg_color: "#FF0000".into(),
+            ..Default::default()
+        };
+        c.monitors.push(MonitorOverride {
+            id: "MON#A".into(),
+            label: "A".into(),
+            layout: Some(own.clone()),
+            appearance: None,
+        });
+        c.monitors.push(MonitorOverride {
+            id: "MON#B".into(),
+            label: "B".into(),
+            layout: None,
+            appearance: Some(look.clone()),
+        });
+        assert_eq!(c.layout_for("mon#a"), &own, "ID bez ohladu na velkost");
+        assert_eq!(c.appearance_for("MON#A"), &c.appearance);
+        assert_eq!(c.layout_for("MON#B"), &c.layout);
+        assert_eq!(c.appearance_for("MON#B"), &look);
+        assert_eq!(c.layout_for("iny"), &c.layout);
+        // zapis a nacitanie zachova zaznamy
+        let back = parse(&serde_json::to_string(&c).unwrap()).config;
+        assert_eq!(back.monitors, c.monitors);
+    }
+
+    #[test]
+    fn broken_or_duplicate_monitor_entries_are_skipped() {
+        let json = r#"{"version":7,"monitors":[{"id":""},{"id":"X","layout":{"items":[]}},{"id":"x"},3,{"id":"Y","appearance":{"bg_opacity":5}}]}"#;
+        let c = parse(json).config;
+        let ids: Vec<&str> = c.monitors.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["X", "Y"]);
+        // prazdne rozlozenie sa doplni o vsetky zname polozky (ako spolocne)
+        assert!(!c.monitors[0].layout.as_ref().unwrap().items.is_empty());
+        assert_eq!(
+            c.monitors[1].appearance.as_ref().unwrap().opacity_percent(),
+            MIN_OPACITY_PERCENT
+        );
     }
 }

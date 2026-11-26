@@ -293,7 +293,7 @@ pub trait BarHandler {
     fn paint(&mut self, ctx: &PaintCtx);
     /// Vzhlad pozadia listy; alfa < 255 prepne okno na vrstveny rezim (priehladne pozadie), 255 = nepriehladne
     /// s ClearType (povodna cesta). Cita sa pri kazdom prekresleni, takze zmena nastaveni sa prejavi hned.
-    fn appearance(&self) -> BarAppearance {
+    fn appearance(&self, _monitor_id: &str) -> BarAppearance {
         BarAppearance::OPAQUE
     }
     fn on_event(&mut self, _event: &BarEvent) {}
@@ -402,11 +402,13 @@ fn request_redraw(raw: isize, rect: Option<RECT>) {
     }
 }
 
-fn handler_appearance() -> Option<BarAppearance> {
+/// Vzhlad listy okna `raw` (kazdy monitor moze mat vlastny).
+fn handler_appearance(raw: isize) -> Option<BarAppearance> {
+    let id = bar_info(raw).map(|(id, _)| id).unwrap_or_default();
     HANDLER.with(|c| {
         c.try_borrow()
             .ok()
-            .and_then(|g| g.as_ref().map(|h| h.appearance()))
+            .and_then(|g| g.as_ref().map(|h| h.appearance(&id)))
     })
 }
 
@@ -487,7 +489,7 @@ fn retry_layered(hwnd: HWND) {
 /// `UpdateLayeredWindow` len pre neplatnu oblast.
 fn layered_redraw(hwnd: HWND) {
     let raw = hwnd.0 as isize;
-    let Some(app) = handler_appearance() else {
+    let Some(app) = handler_appearance(raw) else {
         // handler prave bezi (re-entrancia): neplatna oblast ostava, skusit o chvilu znova cez kratky casovac
         // (okamzity opakovany `PostMessage` by sa v vnorenej slucke sprav mohol tocit dokola)
         retry_layered(hwnd);
@@ -1725,7 +1727,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
             WM_PAINT => {
                 // priehladne pozadie: prepnut na vrstveny rezim / sklo; nepriehladne: povodna cesta (ClearType) nizsie.
                 // Sklo (nevrstvene okno) dostava `WM_PAINT` aj pri odkryti a zmene velkosti: cele sa prekresli.
-                if let Some(a) = handler_appearance().filter(|a| !a.is_opaque()) {
+                if let Some(a) = handler_appearance(raw).filter(|a| !a.is_opaque()) {
                     let mut ps = PAINTSTRUCT::default();
                     BeginPaint(hwnd, &mut ps);
                     let _ = EndPaint(hwnd, &ps);

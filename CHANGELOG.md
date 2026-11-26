@@ -22,6 +22,8 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ### Fixed
 - Clicking an empty spot or another item on the bar now closes an open panel or island menu.
+- On some PCs the rounded corners of cards and buttons in Settings and panels showed as black wedges.
+- The bar no longer disappears while the colour picker is active.
 
 ## [0.1.2] - 2026-11-26
 

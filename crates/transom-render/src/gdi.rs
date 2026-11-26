@@ -272,10 +272,74 @@ impl GdiPainter {
                 return;
             };
             let stride = s.w as usize;
-            let px = s.pixels();
-            for y in 0..rect.h {
-                let at = y as usize * stride;
-                row(y, &mut px[at..at + rect.w as usize]);
+            // pamatovy DC (vsetky nase buffre): miesanie v softveri - `AlphaBlend` niektore ovladace (napr. pri HDR)
+            // vykonaju bez alfy a priehladne body (rohy kariet a tlacidiel) by ostali cierne
+            // SAFETY: platny HDC; typ objektu sa len cita.
+            let memory = unsafe {
+                windows::Win32::Graphics::Gdi::GetObjectType(HGDIOBJ(self.hdc.0))
+                    == windows::Win32::Graphics::Gdi::OBJ_MEMDC.0 as u32
+            };
+            if memory {
+                let n = rect.w as usize;
+                let mut src = vec![0u32; n * rect.h as usize];
+                for y in 0..rect.h {
+                    let at = y as usize * n;
+                    row(y, &mut src[at..at + n]);
+                }
+                // SAFETY: oba DC su platne; obdlznik lezi v DIB (`rect.w <= s.w`, `rect.h <= s.h`).
+                let read = unsafe {
+                    windows::Win32::Graphics::Gdi::BitBlt(
+                        s.dc,
+                        0,
+                        0,
+                        rect.w,
+                        rect.h,
+                        Some(self.hdc),
+                        rect.x,
+                        rect.y,
+                        windows::Win32::Graphics::Gdi::SRCCOPY,
+                    )
+                    .is_ok()
+                };
+                if read {
+                    // SAFETY: dokoncenie GDI operacii pred citanim bodov DIB.
+                    unsafe {
+                        let _ = windows::Win32::Graphics::Gdi::GdiFlush();
+                    }
+                    let px = s.pixels();
+                    for y in 0..rect.h as usize {
+                        for x in 0..n {
+                            let d = &mut px[y * stride + x];
+                            *d = over_premul(src[y * n + x], *d);
+                        }
+                    }
+                    // SAFETY: ako vyssie; zapis do nasho DC respektuje jeho orezanie.
+                    unsafe {
+                        let _ = windows::Win32::Graphics::Gdi::BitBlt(
+                            self.hdc,
+                            rect.x,
+                            rect.y,
+                            rect.w,
+                            rect.h,
+                            Some(s.dc),
+                            0,
+                            0,
+                            windows::Win32::Graphics::Gdi::SRCCOPY,
+                        );
+                    }
+                    return;
+                }
+                // citanie zlyhalo: spat na `AlphaBlend` s uz pripravenymi bodmi
+                let px = s.pixels();
+                for y in 0..rect.h as usize {
+                    px[y * stride..y * stride + n].copy_from_slice(&src[y * n..(y + 1) * n]);
+                }
+            } else {
+                let px = s.pixels();
+                for y in 0..rect.h {
+                    let at = y as usize * stride;
+                    row(y, &mut px[at..at + rect.w as usize]);
+                }
             }
             let bf = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -291,6 +355,23 @@ impl GdiPainter {
             }
         });
     }
+}
+
+/// Premultiplikovany bod `src` nad `dst` (ako `AlphaBlend` s `AC_SRC_ALPHA`, vratane alfy ciela).
+fn over_premul(src: u32, dst: u32) -> u32 {
+    let sa = src >> 24;
+    if sa == 0 {
+        return dst;
+    }
+    if sa == 255 {
+        return src;
+    }
+    let inv = 255 - sa;
+    let ch = |sh: u32| {
+        let v = ((src >> sh) & 0xFF) + (((dst >> sh) & 0xFF) * inv + 127) / 255;
+        v.min(255) << sh
+    };
+    ch(24) | ch(16) | ch(8) | ch(0)
 }
 
 /// Premultiplikovany ARGB pixel (`AlphaBlend` s `AC_SRC_ALPHA`).
@@ -725,6 +806,16 @@ mod tests {
             SelectObject(dc, bmp.into());
             (dc, bmp, bits as *mut u32)
         }
+    }
+
+    #[test]
+    fn software_blending_matches_premultiplied_source_over() {
+        // nulova alfa = ciel nezmeneny (rohy kariet nesmu sciernet), plna = zdroj, polovica = zmes
+        assert_eq!(over_premul(0, 0x80FF_FFFF), 0x80FF_FFFF);
+        assert_eq!(over_premul(0xFF10_2030, 0xFFFF_FFFF), 0xFF10_2030);
+        let m = over_premul(premul(0, 0, 0, 128), 0xFFFF_FFFF);
+        assert_eq!(m >> 24, 255);
+        assert!(((m & 0xFF) as i32 - 127).abs() <= 1, "{m:#x}");
     }
 
     #[test]

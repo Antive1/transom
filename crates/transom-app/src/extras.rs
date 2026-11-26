@@ -896,7 +896,14 @@ impl App {
         match kind {
             POP_TIMER => timer_rows(&self.timers, &self.config.timer, paint_now_ms()),
             POP_BRIGHT => bright_rows(&self.bright_snapshot()),
-            POP_EDIT => crate::bar_edit::rows(&self.config.layout, self.config.center_locked()),
+            POP_EDIT => {
+                // uprava lisaty monitora, na ktorom sa otvorila (jeho vlastne rozlozenie, ak ho ma)
+                let l = self
+                    .config
+                    .layout_for(self.popover_monitor.as_deref().unwrap_or(""));
+                let locked = l.items.iter().any(|s| s.id == "shelf" && s.visible);
+                crate::bar_edit::rows(l, locked)
+            }
             POP_UPDATE => self
                 .update_view()
                 .map(|v| crate::update_pop::rows(&v))
@@ -933,13 +940,14 @@ impl App {
         }
         if kind == POP_EDIT {
             let Cmd::Click(id) = cmd else { return };
-            match crate::bar_edit::decode(&self.config.layout, id) {
+            let m = self.popover_monitor.clone().unwrap_or_default();
+            match crate::bar_edit::decode(self.config.layout_for(&m), id) {
                 Some(crate::bar_edit::EditCmd::Done) => {
                     popup::request(transom_platform::popup::Request::ClosePopover);
                 }
                 Some(c) => {
                     log(&format!("uprava lisaty: {c:?}"));
-                    self.save_config_with(|cfg| crate::bar_edit::apply(&mut cfg.layout, &c));
+                    self.save_config_with(|cfg| crate::bar_edit::apply(cfg.layout_for_mut(&m), &c));
                     crate::invalidate_all();
                     popup::invalidate_popover();
                 }
