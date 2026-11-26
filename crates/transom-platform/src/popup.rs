@@ -183,6 +183,17 @@ pub fn request(r: Request) {
     }
 }
 
+/// Ak su vo fronte poziadavky (zaradene pred vznikom riadiaceho okna), posle riadiacemu oknu spravu, nech ich spracuje.
+pub(crate) fn kick_requests() {
+    if QUEUE.with(|q| q.borrow().is_empty()) {
+        return;
+    }
+    if let Some(ctl) = ctl_hwnd() {
+        // SAFETY: PostMessageW len s cislami na nase riadiace okno.
+        let _ = unsafe { PostMessageW(Some(ctl), WM_TRANSOM_REQUEST, WPARAM(0), LPARAM(0)) };
+    }
+}
+
 /// Druh otvoreneho popoveru.
 pub fn popover_open() -> Option<u32> {
     POP.with(|p| p.get()).map(|p| p.kind)

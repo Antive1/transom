@@ -8,6 +8,9 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+### Fixed
+- The Welcome page now really opens on the first start (the request was queued before the bar could handle it).
+
 ## [0.1.1] - 2026-11-26
 
 ### Added

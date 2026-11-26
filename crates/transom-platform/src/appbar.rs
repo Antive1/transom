@@ -916,6 +916,9 @@ impl BarHost {
             })
         });
         CTL.with(|c| c.set(ctl.0 as isize));
+        // poziadavky zaradene este pred vznikom riadiaceho okna (napr. otvorenie nastaveni pri prvom spusteni) by inak
+        // cakali na dalsiu poziadavku: sprava ich spracuje hned po spusteni slucky
+        crate::popup::kick_requests();
         let pn = PowerNotifications::register(ctl);
         POWER.with(|c| *c.borrow_mut() = Some(pn));
         reconcile("startup");
