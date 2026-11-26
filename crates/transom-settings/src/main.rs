@@ -3974,7 +3974,7 @@ fn dib_buffer(
     dc: windows::Win32::Graphics::Gdi::HDC,
     w: i32,
     h: i32,
-) -> Option<windows::Win32::Graphics::Gdi::HBITMAP> {
+) -> Option<(windows::Win32::Graphics::Gdi::HBITMAP, *mut u32)> {
     use windows::Win32::Graphics::Gdi::{
         CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
     };
@@ -3995,6 +3995,7 @@ fn dib_buffer(
     unsafe { CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) }
         .ok()
         .filter(|_| !bits.is_null())
+        .map(|b| (b, bits as *mut u32))
 }
 
 fn apply_dwm(hwnd: HWND, th: &Theme) {
@@ -4624,14 +4625,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let mem = CreateCompatibleDC(Some(hdc));
                 // buffer v pamati (DIB, ako panely): kreslenie a miesanie robi GDI v softveri, nie ovladac grafiky - na
                 // niektorych ovladacoch `AlphaBlend` do bitmapy zariadenia ignoroval alfu (cierne rohy kariet)
-                let bmp =
-                    dib_buffer(mem, w, h).unwrap_or_else(|| CreateCompatibleBitmap(hdc, w, h));
+                let dib = dib_buffer(mem, w, h);
+                let bmp = dib.map_or_else(|| CreateCompatibleBitmap(hdc, w, h), |d| d.0);
                 let old = SelectObject(mem, bmp.into());
                 let dpi = GetDpiForWindow(hwnd).max(96);
                 with_ui(|ui| {
                     let mut p = GdiPainter::new(mem, Size { w, h }, dpi);
                     ui.paint(&mut p);
                 });
+                // okno je cele nepriehladne: GDI necha alfu bodov 0, miesanie ju nastavi na 255 - nastroje, ktore oknam
+                // pridavaju priehladnost podla alfy (napr. Mica pre vsetky okna), by inak ukazali pozadie len cez cast
+                // okna a rohy kariet by boli cierne
+                if let Some((_, bits)) = dib {
+                    let _ = windows::Win32::Graphics::Gdi::GdiFlush();
+                    let px = std::slice::from_raw_parts_mut(bits, (w * h) as usize);
+                    for v in px {
+                        *v |= 0xFF00_0000;
+                    }
+                }
                 let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);
                 SelectObject(mem, old);
                 let _ = DeleteObject(bmp.into());
