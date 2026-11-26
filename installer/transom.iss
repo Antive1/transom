@@ -2,7 +2,7 @@
 ; Build with tools\build-installer.ps1, which compiles the release binaries first and passes the version.
 
 #ifndef AppVersion
-  #define AppVersion "0.1.0"
+  #define AppVersion "0.1.1"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\target\release"

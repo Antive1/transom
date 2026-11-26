@@ -8,6 +8,8 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-26
+
 ### Added
 - A Welcome page on the first start: start with Windows, the island, glass, AI usage (Claude Code, Codex), weather and
   updates in one place. It stays in Settings › System › Welcome.
@@ -32,5 +34,6 @@ Each release's section is copied into its GitHub release, and the bar shows it w
   new, and transom downloads, verifies and installs the new version.
 - Portable copies open the release page instead of installing.
 
-[Unreleased]: https://github.com/Antive1/transom/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Antive1/transom/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Antive1/transom/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Antive1/transom/releases/tag/v0.1.0

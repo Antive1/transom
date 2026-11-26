@@ -99,7 +99,7 @@ dependencies = [
 
 [[package]]
 name = "transom-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "transom-audio",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "transom-audio"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows",
  "windows-core",
@@ -128,7 +128,7 @@ dependencies = [
 
 [[package]]
 name = "transom-config"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -136,22 +136,22 @@ dependencies = [
 
 [[package]]
 name = "transom-core"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "transom-i18n"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "transom-launcher"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-config",
 ]
 
 [[package]]
 name = "transom-media"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-core",
  "windows",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "transom-mixer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows",
  "windows-core",
@@ -167,14 +167,14 @@ dependencies = [
 
 [[package]]
 name = "transom-peripherals"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "windows",
 ]
 
 [[package]]
 name = "transom-platform"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-core",
  "transom-i18n",
@@ -184,7 +184,7 @@ dependencies = [
 
 [[package]]
 name = "transom-render"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-core",
  "transom-platform",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "transom-settings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-config",
  "transom-core",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "transom-sound"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "transom-config",
  "windows",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "transom-statusline"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
  "transom-config",
@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "transom-tools"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -236,7 +236,7 @@ dependencies = [
 
 [[package]]
 name = "transom-usage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
