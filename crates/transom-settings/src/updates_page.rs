@@ -43,14 +43,45 @@ impl Ui {
             12.0,
             th.muted,
         ) + px(10);
-        y = self.flow_buttons(
-            p,
-            x0,
-            y,
-            w,
-            vec![(t("upd.check_now"), Hit::UpdCheck, false)],
-        );
+        // lista nasla novsiu verziu: instalacia rovno odtialto (vykona ju lista, ako "Aktualizovat teraz")
+        let avail =
+            transom_config::read_update_state().filter(|v| newer(v, env!("CARGO_PKG_VERSION")));
+        if let Some(v) = &avail {
+            y = self.paragraph(p, x0, y, w, &tf("upd.pop_title", &[v]), 12.0, th.foreground)
+                + px(6);
+        }
+        let mut btns = Vec::new();
+        if avail.is_some() {
+            btns.push((t("upd.now"), Hit::UpdInstall, true));
+        }
+        btns.push((t("upd.check_now"), Hit::UpdCheck, false));
+        y = self.flow_buttons(p, x0, y, w, btns);
         y = self.paragraph(p, x0, y, w, &t("upd.privacy"), 12.0, th.muted) + px(4);
         self.card_end(s, x0, w, y);
+    }
+}
+
+/// Je verzia `v` novsia nez `cur` (`major.minor.patch`, pripona za `-` sa ignoruje)?
+fn newer(v: &str, cur: &str) -> bool {
+    let parse = |s: &str| -> Option<(u64, u64, u64)> {
+        let mut it = s.trim_start_matches('v').split('-').next()?.split('.');
+        Some((
+            it.next()?.parse().ok()?,
+            it.next()?.parse().ok()?,
+            it.next().unwrap_or("0").parse().ok()?,
+        ))
+    };
+    matches!((parse(v), parse(cur)), (Some(a), Some(b)) if a > b)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_a_newer_version_is_offered() {
+        assert!(super::newer("0.1.3", "0.1.2"));
+        assert!(super::newer("v0.2.0", "0.1.9"));
+        assert!(!super::newer("0.1.2", "0.1.2"));
+        assert!(!super::newer("0.1.1", "0.1.2"));
+        assert!(!super::newer("nonsense", "0.1.2"));
     }
 }

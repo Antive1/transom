@@ -2519,6 +2519,50 @@ pub const RESTORE_MESSAGE: &str = "transom-restore-v1";
 /// Nastavenia ziadaju listu, aby hned skontrolovala aktualizacie.
 pub const UPDATE_CHECK_MESSAGE: &str = "transom-update-check-v1";
 
+/// Nastavenia ziadaju listu, aby nainstalovala dostupnu aktualizaciu (ako "Aktualizovat teraz" v jej paneli).
+pub const UPDATE_INSTALL_MESSAGE: &str = "transom-update-install-v1";
+
+/// Lista oznamuje nastaveniam, ze sa zmenila dostupna aktualizacia (`read_update_state`).
+pub const UPDATE_STATE_MESSAGE: &str = "transom-update-state-v1";
+
+/// Subor s verziou dostupnej aktualizacie, ktoru nasla lista (pre stranku Aktualizacie v nastaveniach):
+/// `TRANSOM_DATA` alebo `%LOCALAPPDATA%\transom`, `update-available.txt`.
+fn update_state_path() -> PathBuf {
+    let dir = std::env::var_os("TRANSOM_DATA")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|b| PathBuf::from(b).join("transom")))
+        .unwrap_or_else(|| std::env::temp_dir().join("transom"));
+    dir.join("update-available.txt")
+}
+
+/// Zapise (alebo pri `None` zmaze) verziu dostupnej aktualizacie.
+pub fn write_update_state(version: Option<&str>) {
+    let p = update_state_path();
+    match version {
+        Some(v) => {
+            if let Some(d) = p.parent() {
+                let _ = std::fs::create_dir_all(d);
+            }
+            let _ = write_atomic(&p, v.as_bytes());
+        }
+        None => {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
+}
+
+/// Verzia dostupnej aktualizacie, ktoru naposledy nasla lista (len kratky platny retazec verzie).
+pub fn read_update_state() -> Option<String> {
+    let s = std::fs::read_to_string(update_state_path()).ok()?;
+    let v = s.trim();
+    (!v.is_empty()
+        && v.len() <= 32
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-'))
+    .then(|| v.to_string())
+}
+
 /// Sprava oknu nastaveni: prepni na stranku (wParam = poradie stranky); posiela ju druha instancia nastaveni (`--page`).
 pub const SETTINGS_PAGE_MESSAGE: &str = "transom-settings-page-v1";
 

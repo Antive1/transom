@@ -443,6 +443,7 @@ struct App {
     /// Index spravy "lokalne data o vyuziti zmazane".
     bc_usage_deleted: u32,
     bc_update_check: u32,
+    bc_update_install: u32,
     /// Aktualizacie (vlakno sa nespusti pri testoch a izolovanych behoch).
     updater: Option<update::Updater>,
     /// Verzia, o ktorej uz lista dala vediet (oznamenie sa neopakuje).
@@ -465,6 +466,8 @@ struct App {
     stats_logged: u64,
     /// Panel Farby: historia, vybrana farba, kde sa otvoril.
     colors: colors_pop::ColorsState,
+    /// Stav dostupnej aktualizacie uz bol zapisany pre nastavenia (aspon raz za beh).
+    update_state_written: bool,
     /// Priehladna lista: farba, ktora je pod nou naozaj vidno (podla monitora) - text sa jej prisposobi.
     under: HashMap<String, (u8, u8, u8)>,
     under_at: Option<Instant>,
@@ -637,6 +640,7 @@ impl App {
             test_ai: 0,
             bc_usage_deleted: register_broadcast(transom_config::USAGE_DELETED_MESSAGE),
             bc_update_check: register_broadcast(transom_config::UPDATE_CHECK_MESSAGE),
+            bc_update_install: register_broadcast(transom_config::UPDATE_INSTALL_MESSAGE),
             updater: None,
             update_announced: None,
             update_avail: None,
@@ -647,6 +651,7 @@ impl App {
             ticker: ticker::Ticker::default(),
             stats_logged: 0,
             colors: Default::default(),
+            update_state_written: false,
             under: HashMap::new(),
             under_at: None,
             wx_anim: None,
@@ -3852,6 +3857,14 @@ impl App {
                 self.update_notice(update_pop::notice_text(r));
             }
         }
+        // stranka Aktualizacie v nastaveniach ponukne instalaciu (len pri zmene)
+        let before = self.update_avail.as_ref().map(|r| r.version.clone());
+        let now = avail.as_ref().map(|r| r.version.clone());
+        if before != now || !self.update_state_written {
+            self.update_state_written = true;
+            transom_config::write_update_state(now.as_deref());
+            transom_platform::post_broadcast(transom_config::UPDATE_STATE_MESSAGE, 0);
+        }
         self.update_avail = avail;
         invalidate_all();
         if popup::popover_open() == Some(POP_UPDATE) {
@@ -4966,6 +4979,10 @@ impl BarHandler for App {
                 self.sync_privacy(false);
                 self.sync_ics();
                 self.sync_updates();
+            }
+            BarEvent::Broadcast(i) if *i == self.bc_update_install => {
+                log("aktualizacie: instalacia z nastaveni");
+                self.update_cmd(update_pop::UP_NOW);
             }
             BarEvent::Broadcast(i) if *i == self.bc_update_check => {
                 log("aktualizacie: kontrola z nastaveni");

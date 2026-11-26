@@ -311,6 +311,7 @@ enum Hit {
     UpdIcon(bool),
     /// Poziadat listu o kontrolu aktualizacii hned.
     UpdCheck,
+    UpdInstall,
     /// Volba stranky Vitajte (id, hodnota).
     Wel(&'static str, bool),
     /// Hotovo na stranke Vitajte: zatvori okno nastaveni.
@@ -3142,6 +3143,11 @@ impl Ui {
                 self.pending_close = true;
                 changed = false;
             }
+            Hit::UpdInstall => {
+                notify_message(transom_config::UPDATE_INSTALL_MESSAGE);
+                self.status = t("upd.downloading");
+                changed = false;
+            }
             Hit::UpdCheck => {
                 notify_message(transom_config::UPDATE_CHECK_MESSAGE);
                 self.status = t("upd.check_sent");
@@ -5028,6 +5034,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             // konfiguraciu zmenil iny proces (volba Zostava / Spotrebovane v paneli AI v lište): prevezme sa **len** tato
             // hodnota, aby ju nasledne ulozenie z tohto okna ticho nevratilo
+            // lista nasla (alebo uz nema) aktualizaciu: stranka Aktualizacie ukaze / skryje instalaciu
+            m if m == update_state_message() => {
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                LRESULT(0)
+            }
             m if m == config_message() => {
                 let loaded = transom_config::load(&transom_config::default_path());
                 let changed = with_ui(|ui| {
@@ -5201,6 +5212,16 @@ fn fit_to_work_area(hwnd: HWND, w: i32, h: i32) -> (i32, i32) {
 fn page_message() -> u32 {
     thread_local! { static MSG: u32 = {
         let name: Vec<u16> = transom_config::SETTINGS_PAGE_MESSAGE.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: retazec ukonceny nulou zije pocas volania.
+        unsafe { RegisterWindowMessageW(PCWSTR(name.as_ptr())) }
+    }; }
+    MSG.with(|m| *m)
+}
+
+/// Id registrovanej spravy "zmenila sa dostupna aktualizacia" (`transom_config::UPDATE_STATE_MESSAGE`).
+fn update_state_message() -> u32 {
+    thread_local! { static MSG: u32 = {
+        let name: Vec<u16> = transom_config::UPDATE_STATE_MESSAGE.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: retazec ukonceny nulou zije pocas volania.
         unsafe { RegisterWindowMessageW(PCWSTR(name.as_ptr())) }
     }; }

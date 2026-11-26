@@ -125,8 +125,12 @@ pub(crate) fn parse_line(
     }
 }
 
-/// Najnovsi subor relacie Codexu (`sessions/RRRR/MM/DD/*.jsonl`) a cas jeho zmeny. Prechadza len najnovsie priecinky
-/// (rok, mesiac, den; pri prazdnom dni den predtym) - lacne, na zistenie, ci Codex prave pracuje.
+/// Najviac tolko poslednych dennych priecinkov sa prezera (vlakno sa pise do priecinka dna, ked zacalo).
+const SESSION_DAYS: usize = 30;
+
+/// Naposledy zmeneny subor relacie Codexu (`sessions/RRRR/MM/DD/*.jsonl`) a cas jeho zmeny - na zistenie, ci Codex
+/// prave pracuje. Codex pise do suboru v priecinku dna, ked vlakno **zacalo** (pokracovanie starsieho vlakna, napr. vo
+/// VS Code, pise do starsieho dna), preto sa porovnaju vsetky subory poslednych [`SESSION_DAYS`] dni s reláciami.
 pub fn latest_session(codex_home: &Path) -> Option<(std::path::PathBuf, std::time::SystemTime)> {
     fn dirs_desc(p: &Path) -> Vec<std::path::PathBuf> {
         let mut v: Vec<_> = std::fs::read_dir(p)
@@ -142,22 +146,17 @@ pub fn latest_session(codex_home: &Path) -> Option<(std::path::PathBuf, std::tim
         v
     }
     let root = codex_home.join("sessions");
-    for y in dirs_desc(&root).into_iter().take(1) {
-        for m in dirs_desc(&y).into_iter().take(2) {
-            for d in dirs_desc(&m).into_iter().take(2) {
-                let newest = std::fs::read_dir(&d)
-                    .ok()?
-                    .flatten()
-                    .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-                    .filter_map(|e| Some((e.path(), e.metadata().ok()?.modified().ok()?)))
-                    .max_by_key(|(_, t)| *t);
-                if newest.is_some() {
-                    return newest;
-                }
-            }
-        }
-    }
-    None
+    let days = dirs_desc(&root)
+        .into_iter()
+        .flat_map(|y| dirs_desc(&y))
+        .flat_map(|m| dirs_desc(&m))
+        .take(SESSION_DAYS);
+    days.filter_map(|d| std::fs::read_dir(d).ok())
+        .flat_map(|r| r.flatten())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| Some((e.path(), e.metadata().ok()?.modified().ok()?)))
+        // pri rovnakom case novsi den (cesta s datumom)
+        .max_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)))
 }
 
 /// Posledny snimok limitov z konca suboru relacie (najviac 256 KB od konca).
@@ -295,6 +294,7 @@ mod tests {
         std::fs::create_dir_all(&old).unwrap();
         std::fs::create_dir_all(&new).unwrap();
         std::fs::write(old.join("rollout-a.jsonl"), COUNT).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(
             new.join("rollout-b.jsonl"),
             format!(
@@ -305,6 +305,19 @@ mod tests {
         .unwrap();
         let (p, _) = latest_session(&home).unwrap();
         assert_eq!(p, new.join("rollout-b.jsonl"), "najnovsi den");
+        // starsie vlakno pokracuje (pise do priecinka dna, ked zacalo): je naposledy zmenene, takze vyhra
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::fs::write(
+            old.join("rollout-a.jsonl"),
+            format!(
+                "{COUNT}
+"
+            ),
+        )
+        .unwrap();
+        let (p, _) = latest_session(&home).unwrap();
+        assert_eq!(p, old.join("rollout-a.jsonl"), "naposledy zmeneny subor");
+        let (p, _) = latest_session(&home).unwrap();
         let snap = last_snapshot(&p).unwrap();
         assert_eq!(snap.windows[0].minutes, 43200);
         assert!((snap.windows[0].used_percent - 34.5).abs() < 0.01);

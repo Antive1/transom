@@ -11,6 +11,7 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 ### Added
 - Colours panel: pick a colour anywhere on the screen with a real eyedropper cursor and a magnifier, see its HEX, RGB and
   HSL, copy it, and keep a history of the colours you picked.
+- Settings > Updates offers *Update now* as soon as the bar has found a new version.
 - Rain and snow on the bar: small falling drops or flakes under the cloud; sun and storm get their own icons.
 
 ### Changed
@@ -24,6 +25,7 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 - Clicking an empty spot or another item on the bar now closes an open panel or island menu.
 - On some PCs the rounded corners of cards and buttons in Settings and panels showed as black wedges.
 - The bar no longer disappears while the colour picker is active.
+- The island missed Codex working when you continued an older Codex thread (for example in VS Code).
 
 ## [0.1.2] - 2026-11-26
 

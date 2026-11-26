@@ -111,6 +111,7 @@ pub(crate) fn role_of(h: &Hit) -> i32 {
         | Hit::TransferExport
         | Hit::TransferImport
         | Hit::UpdCheck
+        | Hit::UpdInstall
         | Hit::WelDone
         | Hit::TransferApply
         | Hit::TransferCancel
