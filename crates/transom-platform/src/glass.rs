@@ -86,6 +86,33 @@ const ATTACHED_RIM: u32 = 30;
 /// Krytie cierneho nadychu tmaveho skla (najhorsi pripad pre kontrast: biela stranka pod oknom).
 pub const DARK_TINT_ALPHA: u8 = 225;
 
+/// Najmensi kontrast textu na skle nad najhorsou strankou pod nim (rezerva pre karty a ovladace, ktore sklo zosvetluju).
+pub const TINT_MIN_CONTRAST: f32 = 5.0;
+
+/// Nadych skla z vlastnej farby listy: zachova jej odtien, ale stmavi ju (tmava tema, k takmer ciernej) alebo zosvetli
+/// (svetla tema, k bielej) prave natolko, aby text `fg` (najslabsi text panela) mal na skle kontrast aspoň
+/// [`TINT_MIN_CONTRAST`] nad bielou aj ciernou strankou pod nim pri kryti `alpha`. Ked to pri danom kryti nejde ani so
+/// zakladnou farbou, vrati zakladnu (ako sklo bez vlastnej farby).
+pub fn readable_tint(color: (u8, u8, u8), fg: (u8, u8, u8), dark: bool, alpha: u8) -> (u8, u8, u8) {
+    // tmava tema: stmavenie k ciernej (odtien aj sytost ostanu, ubuda len jas); svetla: zosvetlenie k bielej
+    let base = if dark { (0, 0, 0) } else { (255, 255, 255) };
+    let mix = |a: (u8, u8, u8), b: (u8, u8, u8), k: f32| {
+        let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round() as u8;
+        (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
+    };
+    let a = alpha as f32 / 255.0;
+    let over = |c: (u8, u8, u8), page: (u8, u8, u8)| mix(page, c, a);
+    let readable = |c: (u8, u8, u8)| {
+        [(0u8, 0u8, 0u8), (255, 255, 255)]
+            .iter()
+            .all(|&page| contrast(fg, over(c, page)) >= TINT_MIN_CONTRAST)
+    };
+    (0..=40)
+        .map(|i| mix(color, base, i as f32 / 40.0))
+        .find(|c| readable(*c))
+        .unwrap_or(if dark { (14, 14, 16) } else { (250, 250, 251) })
+}
+
 impl GlassStyle {
     /// Tmava tema: cierne sklo - takmer cierny nadych 88 % (nad bielou strankou ~#2B2B2C, obsah pod oknom jemne
     /// presvita; s farbami textu z `Theme::glass_pass` ma tlmeny text aj na karte >= 4,5 : 1). Svetla tema: nadych
@@ -507,6 +534,37 @@ pub const OPEN_MS: u32 = 380;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_custom_bar_colour_tints_the_glass_but_text_stays_readable() {
+        let dark_muted = (0x98, 0xA3, 0xB0);
+        let light_muted = (0x50, 0x5B, 0x69);
+        for c in [
+            (0x1F, 0x3A, 0x5F),
+            (0xF3, 0xE9, 0xD2),
+            (255, 0, 0),
+            (0, 200, 120),
+            (255, 255, 255),
+            (0, 0, 0),
+            (120, 40, 200),
+        ] {
+            for (dark, fg) in [(true, dark_muted), (false, light_muted)] {
+                let t = readable_tint(c, fg, dark, DARK_TINT_ALPHA);
+                for page in [(0u8, 0u8, 0u8), (255, 255, 255)] {
+                    let a = DARK_TINT_ALPHA as f32 / 255.0;
+                    let m = |p: u8, x: u8| (p as f32 + (x as f32 - p as f32) * a).round() as u8;
+                    let seen = (m(page.0, t.0), m(page.1, t.1), m(page.2, t.2));
+                    assert!(
+                        contrast(fg, seen) >= TINT_MIN_CONTRAST - 0.05,
+                        "{c:?} dark={dark} page={page:?} tint={t:?}"
+                    );
+                }
+            }
+        }
+        // tmava modra lista v tmavej teme ostane modrastym sklom (nie ciernym)
+        let t = readable_tint((0x1F, 0x3A, 0x5F), dark_muted, true, DARK_TINT_ALPHA);
+        assert!(t.2 as u32 > 2 * t.0 as u32 && t.2 >= 30, "{t:?}");
+    }
     use crate::layered::Area;
 
     #[test]

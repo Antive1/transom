@@ -5,9 +5,11 @@
 //!    klik ma prednost aj pred konfiguraciou (inak by prepinac pri nakonfigurovanej aplikacii nic nerobil);
 //! 2. aplikacia nakonfigurovana pouzivatelom (`prefer_app`, podretazec `SourceAppUserModelId` bez ohladu na velkost),
 //!    ak ma session s platnymi metadatami;
-//! 3. hrajuca session s platnymi metadatami: ak predchadzajuca vybrana stale hra, ostane (stabilita); inak ta,
+//! 3. bez nakonfigurovanej aplikacie ma hudobny prehravac (Spotify) prednost pred prehliadacom a inymi zdrojmi, ak je
+//!    medzi vierohodnymi (hra, ked nieco hra; inak ma metadata) - video v prehliadaci, ktore hra samo, sa ukaze;
+//! 4. hrajuca session s platnymi metadatami: ak predchadzajuca vybrana stale hra, ostane (stabilita); inak ta,
 //!    ktora zacala hrat naposledy;
-//! 4. ak nic nehra: predchadzajuca vybrana, ak stale existuje (po pauze polozka nezmizne); inak jedina/naposledy
+//! 5. ak nic nehra: predchadzajuca vybrana, ak stale existuje (po pauze polozka nezmizne); inak jedina/naposledy
 //!    hrajuca session s metadatami.
 //!
 //! Systemova "aktualna session" sa nepouziva (v S5 sa prepla na sumovu session Riot Client). Session bez nazvu sa
@@ -220,9 +222,22 @@ pub fn select(
             latest(if playing_m.is_empty() { &m } else { &playing_m })
         });
 
+    // predvolena prednost hudobneho prehravaca (len bez nakonfigurovanej aplikacie a len medzi vierohodnymi)
+    let music = if prefer_app.is_some_and(|p| !p.trim().is_empty()) {
+        None
+    } else {
+        let m: Vec<&SessionInfo> = pool
+            .iter()
+            .copied()
+            .filter(|s| is_music_player(&s.app_id))
+            .collect();
+        latest(&m)
+    };
+
     let chosen = find(sessions, user_pick)
         .map(|s| s.key.clone())
         .or_else(|| preferred.clone())
+        .or_else(|| music.clone())
         .or_else(|| {
             if playing.is_empty() {
                 None
@@ -245,6 +260,12 @@ pub fn select(
         }
     }
     Selection { chosen, candidates }
+}
+
+/// Hudobny prehravac, ktory ma predvolene prednost pred prehliadacom (podretazec `SourceAppUserModelId`).
+fn is_music_player(app_id: &str) -> bool {
+    let a = app_id.to_lowercase();
+    ["spotify"].iter().any(|m| a.contains(m))
 }
 
 /// Prikaz pre tlacidlo prehrat/pauza.
@@ -370,6 +391,55 @@ mod tests {
         // len sumova session -> nic
         let sel = select(&v[..1], None, None, None);
         assert_eq!(sel, Selection::default());
+    }
+
+    #[test]
+    fn spotify_wins_over_a_browser_by_default_unless_only_the_browser_plays() {
+        // obaja hraju: Spotify (aj ked prehliadac zacal neskor)
+        let v = vec![
+            s("Spotify.exe", "Song", PlayState::Playing, 1),
+            s("Brave", "Video", PlayState::Playing, 2),
+        ];
+        assert_eq!(
+            select(&v, None, None, None).chosen.as_deref(),
+            Some("Spotify.exe")
+        );
+        // ani predchadzajuca hrajuca session prehliadaca ho nedrzi
+        assert_eq!(
+            select(&v, None, None, Some("Brave")).chosen.as_deref(),
+            Some("Spotify.exe")
+        );
+        // nic nehra: Spotify
+        let v = vec![
+            s("Spotify.exe", "Song", PlayState::Paused, 1),
+            s("Brave", "Video", PlayState::Paused, 2),
+        ];
+        assert_eq!(
+            select(&v, None, None, Some("Brave")).chosen.as_deref(),
+            Some("Spotify.exe")
+        );
+        // hra len prehliadac: prehliadac (pozastaveny Spotify nie je vierohodny)
+        let v = vec![
+            s("Spotify.exe", "Song", PlayState::Paused, 1),
+            s("Brave", "Video", PlayState::Playing, 2),
+        ];
+        assert_eq!(
+            select(&v, None, None, None).chosen.as_deref(),
+            Some("Brave")
+        );
+        // nakonfigurovana aplikacia a vyber pouzivatela maju stale prednost
+        let v = vec![
+            s("Spotify.exe", "Song", PlayState::Playing, 1),
+            s("Brave", "Video", PlayState::Playing, 2),
+        ];
+        assert_eq!(
+            select(&v, Some("brave"), None, None).chosen.as_deref(),
+            Some("Brave")
+        );
+        assert_eq!(
+            select(&v, None, Some("Brave"), None).chosen.as_deref(),
+            Some("Brave")
+        );
     }
 
     #[test]

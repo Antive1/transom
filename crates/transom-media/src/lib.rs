@@ -12,6 +12,9 @@
 //!
 //! Obal / nahlad (`MediaProperties.Thumbnail`):
 //! - cita sa **len** pri `MediaPropertiesChanged` danej session (a pri prihlaseni k session), nie pri zmene stavu;
+//! - po zmene skladby (udalost aj prikaz dalsia / predosla) sa session docita este [`FOLLOW_UPS_MS`] po nej: Spotify
+//!   posiela udalost skor, nez ma novy nazov a hlavne obal pripraveny, a dalsia udalost uz nemusi prist (na pomalsom PC
+//!   by ostal stary obal / nazov az do dalsej zmeny);
 //! - bajty (max. 8 MB) sa zahashuju; rovnaky obsah sa dekoduje len raz (cache podla hashu, max. 24 obrazkov);
 //! - dekodovanie cez WIC: stredovy stvorcovy vyrez, zmensenie na 96 x 96 (Fant), `32bppPBGRA`;
 //! - obal sa viaze na identitu media (`SessionInfo::media_key`, `resolve_art`): zastaraly obal inej skladby sa
@@ -24,6 +27,35 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use transom_core::image::{content_hash, Image};
+
+/// Docitania session po zmene skladby (ms po udalosti / prikaze).
+const FOLLOW_UPS_MS: [u64; 4] = [250, 800, 2000, 4000];
+
+/// Naplanuje docitania session `key` (nahradi predosle planovane docitania tej istej session).
+fn plan_follow_ups(f: &mut Vec<(Instant, String)>, key: &str, now: Instant) {
+    f.retain(|(_, k)| k != key);
+    f.extend(
+        FOLLOW_UPS_MS
+            .iter()
+            .map(|ms| (now + Duration::from_millis(*ms), key.to_string())),
+    );
+}
+
+/// Docitania, ktore uz nastali: odstrani ich a vrati kluce session (bez opakovania).
+fn due_follow_ups(f: &mut Vec<(Instant, String)>, now: Instant) -> Vec<String> {
+    let mut due = Vec::new();
+    f.retain(|(t, k)| {
+        if *t <= now {
+            if !due.contains(k) {
+                due.push(k.clone());
+            }
+            false
+        } else {
+            true
+        }
+    });
+    due
+}
 use transom_core::media::{
     resolve_art, stable_state, Controls, Fetched, PlayState, SessionInfo, Timeline,
 };
@@ -501,6 +533,8 @@ fn worker(
     let mut counter = 0u64;
     let mut published: Option<Vec<SessionInfo>> = None;
     let mut pending_refresh = true;
+    // planovane docitania po zmene skladby (cas, kluc session)
+    let mut follow_ups: Vec<(Instant, String)> = Vec::new();
 
     loop {
         if pending_refresh {
@@ -549,7 +583,23 @@ fn worker(
                 notify();
             }
         }
-        let Ok(first) = rx.recv() else { break };
+        // cakat na udalost, najdlhsie do najblizsieho docitania
+        let first = match follow_ups.iter().map(|(t, _)| *t).min() {
+            None => match rx.recv() {
+                Ok(m) => Some(m),
+                Err(_) => break,
+            },
+            Some(due) => match rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                Ok(m) => Some(m),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            },
+        };
+        for k in due_follow_ups(&mut follow_ups, Instant::now()) {
+            art_pending.insert(k);
+            pending_refresh = true;
+        }
+        let Some(first) = first else { continue };
         // udalosti chodia v davkach (props + playback): kratko pockat a zlucit
         std::thread::sleep(Duration::from_millis(30));
         let mut msgs = vec![first];
@@ -562,6 +612,7 @@ fn worker(
                 Msg::Quit => quit = true,
                 Msg::Refresh => pending_refresh = true,
                 Msg::Props(k) => {
+                    plan_follow_ups(&mut follow_ups, &k, Instant::now());
                     art_pending.insert(k);
                     pending_refresh = true;
                 }
@@ -582,6 +633,8 @@ fn worker(
             pending_refresh = true;
         }
         for (k, c) in cmds {
+            // dalsia / predosla skladba: docitat aj bez udalosti (niektore prehravace ju poslu neskoro alebo vobec)
+            plan_follow_ups(&mut follow_ups, &k, Instant::now());
             if !run_command(&subs, &k, c) {
                 lock(&shared).commands_failed += 1;
             }
@@ -605,6 +658,23 @@ fn worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn follow_ups_are_planned_per_session_and_fire_once() {
+        let t0 = Instant::now();
+        let mut f = Vec::new();
+        plan_follow_ups(&mut f, "Spotify.exe", t0);
+        plan_follow_ups(&mut f, "Spotify.exe", t0);
+        assert_eq!(f.len(), FOLLOW_UPS_MS.len(), "opakovana zmena nahradi plan");
+        plan_follow_ups(&mut f, "Brave", t0);
+        assert!(due_follow_ups(&mut f, t0).is_empty());
+        let due = due_follow_ups(&mut f, t0 + Duration::from_millis(300));
+        assert_eq!(due.len(), 2, "{due:?}");
+        assert_eq!(f.len(), 2 * (FOLLOW_UPS_MS.len() - 1));
+        let due = due_follow_ups(&mut f, t0 + Duration::from_secs(5));
+        assert_eq!(due.len(), 2);
+        assert!(f.is_empty());
+    }
 
     #[test]
     fn art_dimensions_are_limited_against_decompression_bombs() {

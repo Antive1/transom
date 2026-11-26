@@ -680,7 +680,7 @@ mod tests {
             "{n:?}"
         );
         assert_eq!(n.fixed.len(), bullets("Fixed"), "{n:?}");
-        assert!(!n.added.is_empty(), "{n:?}");
+        assert!(!n.added.is_empty() || !n.fixed.is_empty(), "{n:?}");
         let wrapped = raw
             .lines()
             .position(|l| l.starts_with("  "))

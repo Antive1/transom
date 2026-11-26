@@ -47,6 +47,8 @@ pub const MAX_DROP_BYTES: usize = 4 * 1024 * 1024;
 
 const T_ANIM: usize = 1;
 const T_GRACE: usize = 2;
+/// Odlozene prekreslenie, ked bola obsluha aplikacie pri `WM_PAINT` zaneprazdnena.
+const T_REPAINT: usize = 4;
 const GRACE_MS: u32 = 650;
 /// `WM_MOUSELEAVE` (nie je v exportoch windows-rs pod tymto menom vo vsetkych verziach).
 const WM_MOUSELEAVE_MSG: u32 = 0x02A3;
@@ -550,6 +552,21 @@ unsafe extern "system" fn notch_proc(
     unsafe {
         match msg {
             WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT if crate::appbar::handler_busy() => {
+                // synchronne prekreslenie z volania aplikacie (otvorenie vybezku): obsah teraz nakreslit nejde - nic
+                // nekreslit (nie cierna plocha) a prekreslit o chvilu, ked sa obsluha uvolni. Bez animacii Windows je toto
+                // jedine prekreslenie pri otvoreni, preto by menu ostrova inak ostalo cele cierne.
+                let mut ps = PAINTSTRUCT::default();
+                BeginPaint(hwnd, &mut ps);
+                let _ = EndPaint(hwnd, &ps);
+                SetTimer(Some(hwnd), T_REPAINT, 15, None);
+                LRESULT(0)
+            }
+            WM_TIMER if wp.0 == T_REPAINT => {
+                let _ = KillTimer(Some(hwnd), T_REPAINT);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                LRESULT(0)
+            }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);

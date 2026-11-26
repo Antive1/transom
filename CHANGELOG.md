@@ -8,8 +8,19 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-26
+
+### Changed
+- The glass under panels (and under the bar) takes the hue of your own bar colour, kept dark or light enough for the text.
+- Spotify is shown on the bar before a browser when both play or nothing plays (a video that plays on its own still shows).
+
 ### Fixed
-- The Welcome page now really opens on the first start (the request was queued before the bar could handle it).
+- The island menu opened as an empty black box on PCs with Windows animations turned off.
+- A thin line showed between the bar and the island menu while it opened.
+- Panels could flash for a moment while opening.
+- After skipping a song the new title and cover could take long to appear (Spotify reports them late; transom now
+  reads them again shortly after the change).
+- The Welcome page now really opens on the first start.
 
 ## [0.1.1] - 2026-11-26
 
@@ -37,6 +48,7 @@ Each release's section is copied into its GitHub release, and the bar shows it w
   new, and transom downloads, verifies and installs the new version.
 - Portable copies open the release page instead of installing.
 
-[Unreleased]: https://github.com/Antive1/transom/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Antive1/transom/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Antive1/transom/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Antive1/transom/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Antive1/transom/releases/tag/v0.1.0

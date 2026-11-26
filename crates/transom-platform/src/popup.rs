@@ -126,6 +126,8 @@ struct Anim {
 }
 
 const TIMER_ANIM: usize = 0x51;
+/// Odlozene prekreslenie, ked bola obsluha aplikacie pri `WM_PAINT` zaneprazdnena.
+const TIMER_REPAINT: usize = 0x52;
 /// Vysunutie panelu z listy (ms) a roztmievanie obsahu (ms).
 const REVEAL_MS: f32 = 230.0;
 const FADE_MS: f32 = 150.0;
@@ -927,6 +929,25 @@ unsafe extern "system" fn popover_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         let kind = POP.with(|p| p.get()).filter(|p| p.hwnd == hwnd.0 as isize);
         match msg {
             WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT if crate::appbar::handler_busy() => {
+                // obsah kresli aplikacia, ktora je prave zaneprazdnena (synchronne prekreslenie z jej volania): nekreslit
+                // prazdny / cierny panel, prekreslit o chvilu
+                let mut ps = PAINTSTRUCT::default();
+                BeginPaint(hwnd, &mut ps);
+                let _ = EndPaint(hwnd, &ps);
+                windows::Win32::UI::WindowsAndMessaging::SetTimer(
+                    Some(hwnd),
+                    TIMER_REPAINT,
+                    15,
+                    None,
+                );
+                LRESULT(0)
+            }
+            WM_TIMER if wp.0 == TIMER_REPAINT => {
+                let _ = KillTimer(Some(hwnd), TIMER_REPAINT);
+                let _ = InvalidateRect(Some(hwnd), None, false);
+                LRESULT(0)
+            }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &mut ps);

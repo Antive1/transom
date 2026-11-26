@@ -980,6 +980,19 @@ impl App {
         (c.r, c.g, c.b)
     }
 
+    /// Nadych skla z vlastnej farby listy (ak je nastavena): odtien listy, stmaveny / zosvetleny len natolko, aby
+    /// najslabsi text panela ostal citatelny nad lubovolnou strankou pod sklom. Bez vlastnej farby `None` (nadych temy).
+    fn glass_tint(&self, alpha: u8) -> Option<(u8, u8, u8)> {
+        let c = self.config.appearance.color()?;
+        let m = self.theme.muted;
+        Some(transom_platform::glass::readable_tint(
+            c,
+            (m.r, m.g, m.b),
+            self.theme.dark,
+            alpha,
+        ))
+    }
+
     fn bar_theme(&self) -> Theme {
         let (bg, alpha) = self.config.appearance.effective(&self.config.oled);
         // sklo pod listou ma nadych temy (nie vlastnu farbu): text sa riadi temou, inak by svetla vlastna farba dala
@@ -4296,6 +4309,10 @@ impl BarHandler for App {
             );
             // nepriehladnost skla podla nastavenia (Pozadie -> Priehladnost panelov)
             st.tint_alpha = (self.config.appearance.glass_opacity.clamp(40, 100) * 255 / 100) as u8;
+            // vlastna farba listy: sklo ma jej odtien (stmaveny / zosvetleny len natolko, aby text ostal citatelny)
+            if let Some(t) = self.glass_tint(st.tint_alpha) {
+                st.tint = t;
+            }
             // pripojene vyrastaju z listy: hore zacinaju jej plnou farbou a plynulo prejdu do skla (sklenena lista
             // uz je tym istym sklom)
             if attached && !self.glass_on(true) {
@@ -4337,11 +4354,16 @@ impl BarHandler for App {
             // pod svetlym textom)
             glass: self.glass_on(true).then(|| {
                 let t = self.theme.background;
-                transom_platform::glass::GlassStyle::for_theme(
+                let mut st = transom_platform::glass::GlassStyle::for_theme(
                     (t.r, t.g, t.b),
                     self.theme.dark,
                     transom_platform::glass::Rim::Bottom,
-                )
+                );
+                // vlastna farba listy: sklenena lista ma jej odtien (text ostava citatelny)
+                if let Some(t) = self.glass_tint(st.tint_alpha) {
+                    st.tint = t;
+                }
+                st
             }),
         }
     }

@@ -727,6 +727,13 @@ pub(crate) fn bar_geometry(monitor_id: &str) -> Option<(RECT, u32)> {
 }
 
 /// Volanie handlera mimo `emit` (kreslenie popoveru); pri re-entrancii sa preskoci.
+/// Je obsluha aplikacie prave zaneprazdnena (sprava prisla synchronne z jej vlastneho volania, napr. `UpdateWindow`
+/// pri otvarani okna)? `with_handler` by vtedy nic neurobil - okno, ktore kresli obsah aplikacie, ma kreslenie odlozit
+/// (inak by ostalo prazdne / cierne, kym ho nic ine neprekresli).
+pub(crate) fn handler_busy() -> bool {
+    HANDLER.with(|c| c.try_borrow_mut().is_err())
+}
+
 pub(crate) fn with_handler(f: impl FnOnce(&mut dyn BarHandler)) {
     HANDLER.with(|c| {
         if let Ok(mut g) = c.try_borrow_mut() {
