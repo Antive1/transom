@@ -40,6 +40,7 @@ mod transfer_page;
 mod transfer_tests;
 mod updates_page;
 mod weather_page;
+mod welcome_page;
 
 use dnd::{apply_drop, column_items, drop_target, ColGeom};
 use std::cell::RefCell;
@@ -201,6 +202,8 @@ enum Page {
     Transfer,
     /// Aktualizacie (kontrola novych vydani).
     Updates,
+    /// Vitajte: zakladne nastavenie (pri prvom spusteni).
+    Welcome,
 }
 
 /// Velke kategorie nastaveni (bocny panel) a ich podkategorie (zalozky nad obsahom): (kluc nazvu, index ikony v
@@ -247,6 +250,7 @@ const CATS: [Cat; 4] = [
         "cat.system",
         11,
         &[
+            (Page::Welcome, "nav.welcome"),
             (Page::Sound, "nav.sound"),
             (Page::Language, "nav.language"),
             (Page::Transfer, "nav.transfer"),
@@ -307,6 +311,10 @@ enum Hit {
     UpdIcon(bool),
     /// Poziadat listu o kontrolu aktualizacii hned.
     UpdCheck,
+    /// Volba stranky Vitajte (id, hodnota).
+    Wel(&'static str, bool),
+    /// Hotovo na stranke Vitajte: zatvori okno nastaveni.
+    WelDone,
     MarqueeDir(&'static str),
     MarqueeSpeed(&'static str),
     MarqueePaused(bool),
@@ -549,6 +557,10 @@ struct Ui {
     hotkey_swallow: bool,
     /// Po uvolneni mysi otvorit dialog vyberu farby (nesmie bezat vo vypozicke stavu).
     pending_pick: bool,
+    /// Spustenie s Windows (hodnota v registri, nie konfiguracia; precitana pri otvoreni okna).
+    autostart: bool,
+    /// Zatvorit okno (Hotovo na stranke Vitajte) - po uvolneni vypozicky stavu.
+    pending_close: bool,
     /// Po uvolneni mysi otvorit vyber vlastnej farby textu.
     pending_text_pick: bool,
     /// Hlaska stranky Doplnky (pridanie kalendara).
@@ -603,7 +615,7 @@ fn button_kind(h: &Hit) -> (Kind, Option<char>) {
         Hit::DeleteData | Hit::ArchiveDelete | Hit::ToolsClear(_) => {
             (Kind::Destructive, Some('\u{E74D}'))
         }
-        Hit::DateAdd | Hit::TransferApply | Hit::CcConnect => (Kind::Primary, None),
+        Hit::DateAdd | Hit::TransferApply | Hit::CcConnect | Hit::WelDone => (Kind::Primary, None),
         Hit::Preset(_)
         | Hit::Lang(_)
         | Hit::ThemeColor
@@ -1312,6 +1324,7 @@ impl Ui {
                 Page::Language => self.paint_language(&mut tp, x0, origin, w),
                 Page::Transfer => self.paint_transfer(&mut tp, x0, origin, w),
                 Page::Updates => self.paint_updates(&mut tp, x0, origin, w),
+                Page::Welcome => self.paint_welcome(&mut tp, x0, origin, w),
             }
             tp.max_bottom
         };
@@ -3124,6 +3137,11 @@ impl Ui {
             }
             Hit::UpdAuto(v) => self.cfg.updates.auto_check = v,
             Hit::UpdIcon(v) => self.cfg.updates.show_icon = v,
+            Hit::Wel(id, v) => changed = self.welcome_set(id, v),
+            Hit::WelDone => {
+                self.pending_close = true;
+                changed = false;
+            }
             Hit::UpdCheck => {
                 notify_message(transom_config::UPDATE_CHECK_MESSAGE);
                 self.status = t("upd.check_sent");
@@ -4321,6 +4339,14 @@ fn after_click(hwnd: HWND, lang_before: transom_i18n::Lang) {
             }
             place_edits(ui, hwnd);
         });
+        if with_ui(|ui| std::mem::take(&mut ui.pending_close)).unwrap_or(false) {
+            let _ = PostMessageW(
+                Some(hwnd),
+                windows::Win32::UI::WindowsAndMessaging::WM_CLOSE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
         // dialog vyberu farby je modalny: spusta sa az po uvolneni vypozicky stavu
         if with_ui(|ui| std::mem::take(&mut ui.pending_pick)).unwrap_or(false) {
             if let Some(cur) = with_ui(|ui| ui.effective_bg()) {
@@ -5082,6 +5108,8 @@ fn make_ui(loaded: transom_config::Loaded, theme: Theme, windows_lang: String) -
         hotkey_msg: None,
         hotkey_swallow: false,
         pending_pick: false,
+        autostart: transom_platform::autostart::enabled(),
+        pending_close: false,
         pending_text_pick: false,
         extras_msg: None,
         commit_pending: false,
@@ -5148,7 +5176,7 @@ fn config_message() -> u32 {
 }
 
 /// Poradie stranok a ich nazvy pre `--page` (rovnake nazvy ako `--shot --page`); index sa posiela druhej instancii.
-const PAGE_ORDER: [(Page, &str); 20] = [
+const PAGE_ORDER: [(Page, &str); 21] = [
     (Page::Layout, "layout"),
     (Page::Displays, "displays"),
     (Page::Media, "media"),
@@ -5170,6 +5198,7 @@ const PAGE_ORDER: [(Page, &str); 20] = [
     (Page::Notch, "notch"),
     (Page::ToolGroup, "toolgroup"),
     (Page::Updates, "updates"),
+    (Page::Welcome, "welcome"),
 ];
 
 /// Predvolby hodin: (kluc, den v tyzdni, cely nazov dna, sekundy, datum).

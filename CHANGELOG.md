@@ -8,6 +8,11 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+### Added
+- A Welcome page on the first start: start with Windows, the island, glass, AI usage (Claude Code, Codex), weather and
+  updates in one place. It stays in Settings › System › Welcome.
+- Start with Windows can now be switched on and off in the app (also for the portable copy).
+
 ## [0.1.0] - 2026-11-26
 
 ### Added

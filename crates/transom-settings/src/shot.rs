@@ -16,7 +16,7 @@ pub(crate) const CLIENT_W_LP: i32 = 824;
 /// Klientska oblast po odstraneni systemovej hlavicky: vyska okna (720) bez dolneho ramu (8).
 pub(crate) const CLIENT_H_LP: i32 = 712;
 
-pub(crate) const PAGES: [(Page, &str); 20] = [
+pub(crate) const PAGES: [(Page, &str); 21] = [
     (Page::Layout, "layout"),
     (Page::Displays, "displays"),
     (Page::Media, "media"),
@@ -31,6 +31,7 @@ pub(crate) const PAGES: [(Page, &str); 20] = [
     (Page::Language, "language"),
     (Page::Transfer, "transfer"),
     (Page::Updates, "updates"),
+    (Page::Welcome, "welcome"),
     (Page::Clipboard, "clipboard"),
     (Page::Notes, "notes"),
     (Page::Shots, "shots"),

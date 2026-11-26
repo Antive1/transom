@@ -77,6 +77,7 @@ pub(crate) fn role_of(h: &Hit) -> i32 {
         | Hit::MarqueeOn(_)
         | Hit::UpdAuto(_)
         | Hit::UpdIcon(_)
+        | Hit::Wel(..)
         | Hit::MarqueeDir(_)
         | Hit::MarqueeSpeed(_)
         | Hit::MarqueePaused(_)
@@ -110,6 +111,7 @@ pub(crate) fn role_of(h: &Hit) -> i32 {
         | Hit::TransferExport
         | Hit::TransferImport
         | Hit::UpdCheck
+        | Hit::WelDone
         | Hit::TransferApply
         | Hit::TransferCancel
         | Hit::ResetLayout

@@ -5289,8 +5289,20 @@ fn main() {
         return;
     }
 
+    // prve spustenie: este ziadny subor nastaveni -> ulozit predvolene (sprievodca sa ukaze len raz) a po starte otvorit
+    // nastavenia na stranke Vitajte (spustenie s Windows, ostrov, sklo, AI, pocasie). Nikdy pri testoch.
+    let cfg_path = transom_config::default_path();
+    let first_run = !cfg_path.exists() && !automation_run();
+    if first_run {
+        match transom_config::save(&cfg_path, &transom_config::Config::default()) {
+            Ok(()) => log("prve spustenie: ulozene predvolene nastavenia"),
+            Err(e) => log(&format!(
+                "prve spustenie: nastavenia sa nepodarilo ulozit: {e}"
+            )),
+        }
+    }
     // vyber monitorov: z konfiguracie (`displays`); `--monitors primary` ho len prepise (testy)
-    let start_cfg = transom_config::load(&transom_config::default_path()).config;
+    let start_cfg = transom_config::load(&cfg_path).config;
     let monitors = if arg("--monitors").as_deref() == Some("primary") {
         MonitorSelection::Primary
     } else {
@@ -5312,6 +5324,9 @@ fn main() {
     ));
     let mut app = App::new(mode, prefer_app, sim_battery, media);
     app.no_tray = flag("--no-tray");
+    if first_run {
+        app.launch_settings(Some("welcome"));
+    }
     // zvuky rozhrania: skutocne zariadenie sa otvori az pri prvom zvuku; pri testoch a simulaciach nikdy
     let automation = automation_run();
     app.sound = snd::start_system(snd::StartOptions {

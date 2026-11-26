@@ -25,7 +25,7 @@ fn shot_h() -> i32 {
     crate::shot::CLIENT_H_LP
 }
 
-const PAGES: [Page; 20] = [
+const PAGES: [Page; 21] = [
     Page::Layout,
     Page::Displays,
     Page::Media,
@@ -40,6 +40,7 @@ const PAGES: [Page; 20] = [
     Page::Language,
     Page::Transfer,
     Page::Updates,
+    Page::Welcome,
     Page::Clipboard,
     Page::Notes,
     Page::Shots,

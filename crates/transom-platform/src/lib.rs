@@ -6,6 +6,7 @@
 pub mod access;
 pub mod activate;
 pub mod appbar;
+pub mod autostart;
 pub mod brightness;
 pub mod clipboard;
 pub mod clock;
