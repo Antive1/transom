@@ -1,0 +1,16 @@
+[package]
+name = "transom-tools"
+description = "transom tools: Shelf, clipboard history and notes storage plus the read-only screenshot library (local, private)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-config = { path = "../transom-config" }
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

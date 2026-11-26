@@ -1,0 +1,70 @@
+# --- Rust build output ---
+target/
+**/target/
+*.pdb
+*.rlib
+*.rmeta
+*.exe
+*.dll
+*.obj
+*.o
+*.ilk
+*.exp
+*.lib
+# Cargo.lock is tracked on purpose (application, reproducible builds).
+
+# --- Generated snapshots and measurement output (reproducible from examples/tools) ---
+/alpha-*.bmp
+/marquee-*.bmp
+/*.bmp
+/alpha_check.csv
+/scratch/
+/shots/
+/out/
+*.png
+*.jpg
+*.jpeg
+!assets/**/*.png
+
+# --- Local data that must never be committed ---
+# transom runtime data (normally lives in %LOCALAPPDATA%\transom and %APPDATA%\transom)
+config.json
+config.json.tmp
+usage-archive.json
+usage-archive.json.tmp
+claude-statusline.jsonl
+usage-cache*.json
+# provider data, credentials, prompts/responses, logs
+.credentials.json
+*.credentials*
+*.cookie
+*.cookies
+*.token
+*.env
+.env*
+*.log
+*.jsonl
+
+# backups and temporary files written by transom itself (settings.json / config backups may contain secrets from other tools)
+*.transom-backup-*
+*.transom-tmp
+claude-setup.json
+backups/
+*.tmp
+*.bak
+*.dmp
+*.etl
+# local assistant / tool settings and scratch output
+.claude/
+/target-*/
+
+# --- Editors / OS ---
+.vs/
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+
+# installer output
+dist/

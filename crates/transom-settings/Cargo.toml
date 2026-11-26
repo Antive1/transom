@@ -1,0 +1,40 @@
+[package]
+name = "transom-settings"
+description = "transom settings window (layout, clock, AI and privacy, audio, sounds) - a separate process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-config = { path = "../transom-config" }
+transom-i18n = { path = "../transom-i18n" }
+transom-core = { path = "../transom-core" }
+transom-platform = { path = "../transom-platform" }
+transom-render = { path = "../transom-render" }
+transom-sound = { path = "../transom-sound" }
+transom-usage = { path = "../transom-usage" }
+transom-tools = { path = "../transom-tools" }
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Variant",
+  "Win32_System_Threading",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Controls_Dialogs",
+  "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "transom-render"
+description = "transom renderer: Painter interface, themes, bar scene and the GDI backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-core = { path = "../transom-core" }
+
+# Backend GDI je len na Windows; rozhranie, temy a scena su prenosne a nezavisia od Win32.
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi"] }
+
+[dev-dependencies]
+# len pre priklad `alpha_check` (skladanie alfy vrstveneho okna); renderer samotny na platforme nezavisi
+transom-platform = { path = "../transom-platform" }
+
+[lints]
+workspace = true

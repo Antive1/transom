@@ -1,0 +1,11 @@
+[package]
+name = "transom-i18n"
+description = "transom translations: locales/*.txt sources, language selection and English fallback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

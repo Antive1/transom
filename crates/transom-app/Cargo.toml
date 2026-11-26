@@ -1,0 +1,32 @@
+[package]
+name = "transom-app"
+description = "The transom bar (AppBar) binary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-core = { path = "../transom-core" }
+transom-config = { path = "../transom-config" }
+transom-i18n = { path = "../transom-i18n" }
+transom-usage = { path = "../transom-usage" }
+transom-media = { path = "../transom-media" }
+transom-platform = { path = "../transom-platform" }
+transom-render = { path = "../transom-render" }
+transom-sound = { path = "../transom-sound" }
+transom-audio = { path = "../transom-audio" }
+transom-mixer = { path = "../transom-mixer" }
+transom-peripherals = { path = "../transom-peripherals" }
+transom-tools = { path = "../transom-tools" }
+serde_json = { workspace = true }
+transom-launcher = { path = "../transom-launcher" }
+windows = { workspace = true, features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

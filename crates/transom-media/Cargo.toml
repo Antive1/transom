@@ -1,0 +1,24 @@
+[package]
+name = "transom-media"
+description = "transom media service: Windows media session (GSMTC) subscription on its own thread"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-core = { path = "../transom-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Media_Control",
+  "Storage_Streams",
+  "Win32_Graphics_Imaging",
+  "Win32_System_Com",
+] }
+
+[lints]
+workspace = true

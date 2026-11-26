@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="128" height="128" role="img" aria-label="transom">
+  <title>transom</title>
+  <path d="M4 12.4 L4 23 L4.04 23.65 L4.17 24.29 L4.38 24.91 L4.67 25.5 L5.03 26.04 L5.46 26.54 L5.96 26.97 L6.5 27.33 L7.09 27.62 L7.71 27.83 L8.35 27.96 L9 28 L23 28 L23.65 27.96 L24.29 27.83 L24.91 27.62 L25.5 27.33 L26.04 26.97 L26.54 26.54 L26.97 26.04 L27.33 25.5 L27.62 24.91 L27.83 24.29 L27.96 23.65 L28 23 L28 12.4" fill="none" stroke="#171B21" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="2" y="4" width="28" height="6" rx="3" fill="#00806A"/>
+  <defs><linearGradient id="fade" gradientUnits="userSpaceOnUse" x1="0" y1="9" x2="0" y2="25.3"><stop offset="0" stop-color="#00806A"/><stop offset="1" stop-color="#171B21"/></linearGradient></defs>
+  <path d="M16 9 L16 23" fill="none" stroke="url(#fade)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

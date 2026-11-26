@@ -1,0 +1,8 @@
+# Repository stores LF; text files are normalized on `git add`.
+* text=auto eol=lf
+
+*.ico binary
+*.bmp binary
+*.png binary
+*.jpg binary
+*.jpeg binary

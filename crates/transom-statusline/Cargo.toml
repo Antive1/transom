@@ -1,0 +1,18 @@
+[package]
+name = "transom-statusline"
+description = "Optional bridge from the Claude Code statusLine to local transom records (cost estimate, plan limits)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+transom-config = { path = "../transom-config" }
+transom-i18n = { path = "../transom-i18n" }
+transom-platform = { path = "../transom-platform" }
+transom-usage = { path = "../transom-usage" }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,121 @@
+name: ci
+
+# Checks only: nothing here publishes, uploads or releases anything, and no secrets are used. Releases are built locally
+# (docs/PUBLISHING.md).
+#
+# Toolchain: rust-toolchain.toml is the single source of truth (channel + components). The jobs run `rustup toolchain install` with
+# no arguments (rustup >= 1.28 installs the active toolchain from that file) instead of a third-party action, and then assert that
+# `rustc` really is the version written in the file. Third-party actions are pinned to full commit SHAs (tag in the comment).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+  # Never set RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS / CARGO_BUILD_RUSTFLAGS here: cargo uses only one source of flags, so any of
+  # them would silently replace `-C target-feature=+crt-static` from .cargo/config.toml (the release-build job asserts this).
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: fmt + clippy (windows, msvc)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          want=$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | tr -d '\r')
+          test -n "$want"
+          v=$(rustc -V); echo "$v"; grep -qF "rustc $want " <<<"$v"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: tests (windows, msvc)
+    runs-on: windows-2025
+    # The app crate's offscreen layout audits are serialised by a global language lock and take ~10 minutes on a developer PC.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          want=$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | tr -d '\r')
+          test -n "$want"
+          v=$(rustc -V); echo "$v"; grep -qF "rustc $want " <<<"$v"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # `--no-fail-fast`: on the very first hosted run we want the complete list of environment-dependent failures (fonts, metrics,
+      # Windows Search, timing), not just the first one. Tests that need a person or a visible desktop window are `#[ignore]`.
+      - run: cargo test --workspace --locked --no-fail-fast
+        timeout-minutes: 50
+
+  release-build:
+    name: release build (windows, msvc)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain from rust-toolchain.toml
+        run: |
+          rustup toolchain install --profile minimal --no-self-update
+          want=$(sed -nE 's/^channel[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' rust-toolchain.toml | tr -d '\r')
+          test -n "$want"
+          v=$(rustc -V); echo "$v"; grep -qF "rustc $want " <<<"$v"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --workspace --release --locked
+      # no upload-artifact / release step on purpose: binaries are not published from CI
+      - name: static CRT really applied (no Visual C++ runtime import)
+        run: |
+          test -z "${RUSTFLAGS}${CARGO_ENCODED_RUSTFLAGS}${CARGO_BUILD_RUSTFLAGS}"
+          for exe in transom-app transom-settings transom-statusline; do
+            if grep -qaiE 'vcruntime140|api-ms-win-crt' "target/release/$exe.exe"; then
+              echo "::error::$exe.exe imports the dynamic CRT (crt-static from .cargo/config.toml was not applied)"
+              exit 1
+            fi
+          done
+
+  deny:
+    name: cargo-deny
+    # The action is a Docker action (Linux runners only); deny.toml already scopes the dependency graph to x86_64-pc-windows-msvc.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2.1.2
+        with:
+          command: check
+          arguments: --locked
