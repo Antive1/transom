@@ -5,9 +5,11 @@ Thanks for your interest! transom is an early-preview (alpha) project, so small,
 ## Before you start
 
 - Open an issue first for anything larger than a bug fix, so we can agree on the approach.
-- transom targets **Windows 11** only and deliberately has **no network access, no telemetry and no auto-update**. Changes that add any
-  of these will not be accepted. It also does not use undocumented Windows interfaces (for example `IPolicyConfig`); prefer documented
-  APIs and say in the pull request which documentation you relied on.
+- transom targets **Windows 11** only and deliberately has **no telemetry and no accounts**. Its only network requests are HTTPS GETs:
+  the update check on GitHub (can be turned off), calendars the user adds and the optional weather ([PRIVACY.md](PRIVACY.md)).
+  Changes that send anything about the user or add another network request will not be accepted without a discussion first.
+- Prefer documented Windows APIs and say in the pull request which documentation you relied on. The one undocumented interface
+  (per-app audio output in the mixer, like EarTrumpet) is isolated in `transom-mixer` and listed in the README's known limitations.
 - Do not add third-party logos, fonts, icons or sounds. Sounds and brand assets are generated from code in this repository.
 
 ## Build and check

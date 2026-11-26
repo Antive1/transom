@@ -2534,6 +2534,25 @@ Vydanie má `panic = "abort"`: každý pád vlákna ukončí lištu.
 | Nízka | `transom-usage/src/cache.rs` (`load`) a iné načítania vlastných dát | Čítajú celý súbor bez stropu veľkosti (vlastné súbory v `%LOCALAPPDATA%\transom`; importy a logy strop majú). |
 | – | `Cargo.toml` | Navrhujem zapnúť `clippy::undocumented_unsafe_blocks` až po zlúčení vetiev (inak by zlyhal clippy iných vetiev). |
 
+### 8.35 Vitajte a spustenie s Windows (2026-11-26, vydanie 0.1.1)
+
+**Prvé spustenie.** Keď lišta pri štarte nenájde súbor nastavení (a nejde o test), uloží predvolené nastavenia a otvorí
+nastavenia na novej stránke **Vitajte** (Systém › Vitajte). Sprievodca sa preto ukáže len raz; stránka zostáva v navigácii.
+Obsah: spúšťať s Windows, ostrov v strede, sklo pod panelmi a pod lištou, AI na lište, Claude Code a Codex (lokálne zdroje),
+tlačidlo na prepojenie Claude Code (stránka AI), počasie na lište a výber miesta (stránka Doplnky), automatická kontrola
+aktualizácií, *Hotovo* zatvorí okno. Voľby menia tie isté polia konfigurácie ako ich vlastné stránky.
+
+**Spustenie s Windows** (`transom-platform/src/autostart.rs`): hodnota `transom` v `HKCU\…\Run` s cestou k `transom-app.exe`
+v úvodzovkách – rovnaká hodnota, akú zapisuje inštalátor, takže ju odinštalátor zmaže; funguje aj pre prenosnú kópiu. Stav sa číta
+z registra pri otvorení okna (nie je v konfigurácii).
+
+**Overenie:**
+- **TEST:** zápis a zmazanie hodnoty v Run pod testovacím názvom (skutočné spustenie s Windows sa nemení), úvodzovky v ceste;
+  stránka Vitajte prešla auditmi nastavení vo všetkých 11 jazykoch a pri 96/144/192 DPI (orezanie textu, prístupnosť – audit
+  odhalil dve rovnomenné skupiny volieb, premenované na „AI na lište“ a „Počasie na lište“ –, klávesnica).
+- **NÁHĽAD:** `transom-settings --shot … --png --full` (snímky stránky v tmavej aj svetlej téme).
+- **Neoverené naživo:** skutočné prvé spustenie na čistom PC (otvorenie stránky z lišty), prepnutie autoštartu z okna.
+
 ## 9. Cargo workspace
 
 ```

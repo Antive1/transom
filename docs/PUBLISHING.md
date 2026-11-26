@@ -15,8 +15,9 @@ Repository: <https://github.com/Antive1/transom>. Releases are built and signed 
 4. The [release workflow](../.github/workflows/release.yml) builds on GitHub, sends the executables and then the installer to
    SignPath, waits for the approval in SignPath (approve each request there), and publishes the release with the installer,
    the portable zip and `SHA256SUMS.txt`. Without the SignPath variables it publishes unsigned files.
-5. Install the setup once: the bar starts, Settings opens, uninstall removes the files and the autostart entry and keeps
-   `%APPDATA%\transom`.
+5. Install the setup once: the bar starts; on a PC without transom settings it opens the Welcome page; an older installed
+   version offers the update (notification, download icon, update panel with the changelog bullets). Uninstall removes the files
+   and the autostart entry and keeps `%APPDATA%\transom`.
 
 Local build (unsigned, for testing): `tools\build-installer.ps1` writes the same files into `dist\`.
 
@@ -32,7 +33,6 @@ Local build (unsigned, for testing): `tools\build-installer.ps1` writes the same
 
 - Signing through SignPath Foundation is prepared but waits for the application to be approved; SmartScreen reputation builds over
   several signed releases.
-- `THIRD_PARTY_NOTICES.md` lists dependencies; generate full license texts (`cargo about`) before going public.
-- Enable *private vulnerability reporting* in the repository settings when it becomes public.
+- `THIRD_PARTY_NOTICES.md` lists dependencies; full license texts (`cargo about`) are not generated yet.
 - Live checks still missing: real volume/mute on an active output, Narrator/NVDA, Logitech hardware.
 - Translations other than `sk` and `en` are AI-drafted and unreviewed.

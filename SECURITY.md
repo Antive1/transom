@@ -1,7 +1,7 @@
 # Security policy
 
-transom is an early-preview (alpha) project. Only the latest commit on the default branch is supported; there are no maintained
-release branches yet.
+transom is an early-preview (alpha) project. Only the **latest release** (and the default branch) is supported; there are no
+maintained release branches. Installed copies update themselves to the latest release (verified checksum; see the README).
 
 ## Reporting a vulnerability
 
@@ -15,7 +15,8 @@ This is a volunteer project: there is no guaranteed response time, but reports a
 
 - Parsing of untrusted files: settings import (`transom-config`, `transom-settings`), usage logs of Claude Code / Codex (`transom-usage`),
   the statusLine bridge input.
-- Anything that writes outside transom's own data, notably the optional edit of `~/.claude/settings.json` (`transom-usage/src/claude_setup.rs`).
+- Anything that writes outside transom's own data, notably the optional edit of `~/.claude/settings.json` (`transom-usage/src/claude_setup.rs`)
+  and the *Start with Windows* value in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (`transom-platform/src/autostart.rs`).
 - Misuse of `ShellExecuteW`, `SendInput` or window messages that could be triggered by another program.
 - Anything that sends data over the network (by design only HTTPS GETs: the GitHub release list and installer for updates, calendar
   links the user added and the optional weather) or leaks

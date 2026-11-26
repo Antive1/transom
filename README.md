@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Antive1/transom/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Antive1/transom?include_prereleases&label=release"></a>
+  <a href="https://github.com/Antive1/transom/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Antive1/transom?label=release"></a>
   <img alt="Windows 11" src="https://img.shields.io/badge/Windows-11-0078D4?logo=windows11&logoColor=white">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.100-B7410E?logo=rust&logoColor=white">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-3FE0B5"></a>
