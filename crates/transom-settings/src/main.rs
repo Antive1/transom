@@ -3969,6 +3969,34 @@ fn colorref(c: Color) -> u32 {
 
 /// DWM: tmave systemove prvky (menu na Alt+Medzernik), jemny okraj v farbe okna a zaoblene rohy (Windows 11; inde sa
 /// volanie ignoruje).
+/// 32-bitova DIB sekcia `w` x `h` pre pamatovy DC `dc` (`None` = nepodarilo sa, pouzije sa bitmapa zariadenia).
+fn dib_buffer(
+    dc: windows::Win32::Graphics::Gdi::HDC,
+    w: i32,
+    h: i32,
+) -> Option<windows::Win32::Graphics::Gdi::HBITMAP> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateDIBSection, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: w,
+            biHeight: -h,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: DIB pre nas pamatovy DC; bity vlastni bitmapa (uvolni ju volajuci cez DeleteObject).
+    unsafe { CreateDIBSection(Some(dc), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) }
+        .ok()
+        .filter(|_| !bits.is_null())
+}
+
 fn apply_dwm(hwnd: HWND, th: &Theme) {
     // SAFETY: atributy DWM s ukazovatelmi na lokalne cisla a ich velkostou.
     unsafe {
@@ -4594,7 +4622,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 let _ = GetClientRect(hwnd, &mut rc);
                 let (w, h) = (rc.right.max(1), rc.bottom.max(1));
                 let mem = CreateCompatibleDC(Some(hdc));
-                let bmp = CreateCompatibleBitmap(hdc, w, h);
+                // buffer v pamati (DIB, ako panely): kreslenie a miesanie robi GDI v softveri, nie ovladac grafiky - na
+                // niektorych ovladacoch `AlphaBlend` do bitmapy zariadenia ignoroval alfu (cierne rohy kariet)
+                let bmp =
+                    dib_buffer(mem, w, h).unwrap_or_else(|| CreateCompatibleBitmap(hdc, w, h));
                 let old = SelectObject(mem, bmp.into());
                 let dpi = GetDpiForWindow(hwnd).max(96);
                 with_ui(|ui| {
