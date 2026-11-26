@@ -13,7 +13,7 @@ use transom_platform::menu_access::{
 /// MSAA `STATE_SYSTEM_UNAVAILABLE`.
 const STATE_UNAVAILABLE: i32 = 0x1;
 use transom_platform::PointerKind;
-use transom_render::{Font, HAlign, Painter, Rect, TextStyle, Theme};
+use transom_render::{Color, Font, HAlign, Painter, Rect, TextStyle, Theme};
 
 /// Tlacidlo v riadku tlacidiel.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,6 +82,15 @@ pub enum Row {
     Transport(Vec<Btn>),
     /// Predvolby ako zaoblene "pilulky" (rovnomerne v riadku).
     Chips(Vec<Btn>),
+    /// Velka vzorka farby a vedla nej jej zapis (HEX zvyraznene, pod nim podrobnosti), len na citanie.
+    Color {
+        color: (u8, u8, u8),
+        title: String,
+        detail: String,
+        acc: String,
+    },
+    /// Mriezka okruhlych vzoriek farieb (klik = `Cmd::Click(id)`; vybrana ma prstenec).
+    Swatches(Vec<Swatch>),
     /// Posuvnik 0..=100 s volitelnou ikonou vlavo a hodnotou vpravo.
     Slider {
         id: u32,
@@ -106,6 +115,16 @@ pub enum Row {
     /// Bod zoznamu (odrazka a zalomeny text, najviac `BULLET_LINES` riadkov, potom elipsa).
     Bullet(String),
     Gap(i32),
+}
+
+/// Vzorka farby v mriezke `Row::Swatches`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Swatch {
+    pub id: u32,
+    pub color: (u8, u8, u8),
+    pub selected: bool,
+    /// Pristupny nazov (napr. HEX).
+    pub acc: String,
 }
 
 /// Najviac riadkov jedneho bodu zoznamu.
@@ -419,6 +438,104 @@ impl Kit {
                         ));
                     }
                     y += ch + px(12);
+                }
+                Row::Color {
+                    color,
+                    title,
+                    detail,
+                    acc,
+                } => {
+                    let sw = px(64);
+                    let c = Color::rgb(color.0, color.1, color.2);
+                    let box_r = Rect::new(pad, y, sw, sw);
+                    // jemny okraj, aby bola viditelna aj farba blizka pozadiu
+                    p.fill_round_rect(box_r, px(10), th.control_edge);
+                    let b = px(1).max(1);
+                    p.fill_round_rect(
+                        Rect::new(box_r.x + b, box_r.y + b, sw - 2 * b, sw - 2 * b),
+                        px(10) - b,
+                        c,
+                    );
+                    let tx = pad + sw + px(14);
+                    let tw = (pad + w - tx).max(0);
+                    let ts = TextStyle {
+                        font: Font::Ui,
+                        size_lp: 22.0,
+                        bold: true,
+                        color: th.foreground,
+                        align: HAlign::Left,
+                    };
+                    p.draw_text(title, Rect::new(tx, y + px(4), tw, px(32)), &ts);
+                    let ds = st(11.5, false, th.muted, HAlign::Left);
+                    let mut ly = y + px(36);
+                    for l in detail.lines().take(2) {
+                        let shown = fit(p, l, &ds, tw);
+                        p.draw_text(&shown, Rect::new(tx, ly, tw, line), &ds);
+                        ly += line;
+                    }
+                    nodes.push((Rect::new(pad, y, w, sw), acc.clone(), stat(), false, None));
+                    y += sw + px(14);
+                }
+                Row::Swatches(list) => {
+                    let d = px(30);
+                    let gap = px(8);
+                    let per = ((w + gap) / (d + gap)).max(1);
+                    for (k, sw) in list.iter().enumerate() {
+                        let (col, row) = (k as i32 % per, k as i32 / per);
+                        let r = Rect::new(pad + col * (d + gap), y + row * (d + gap), d, d);
+                        let hit = Hit::Button(sw.id);
+                        let hov = self.hover == Some(hit);
+                        if sw.selected || hov {
+                            // prstenec vybranej / pod mysou (vybrana akcentom)
+                            p.fill_round_rect(
+                                r,
+                                d / 2,
+                                if sw.selected {
+                                    th.accent
+                                } else {
+                                    th.control_edge
+                                },
+                            );
+                            let o = px(2);
+                            p.fill_round_rect(
+                                Rect::new(r.x + o, r.y + o, d - 2 * o, d - 2 * o),
+                                d / 2 - o,
+                                th.background,
+                            );
+                        } else {
+                            p.fill_round_rect(r, d / 2, th.control_edge);
+                        }
+                        let i = if sw.selected || hov {
+                            px(4)
+                        } else {
+                            px(1).max(1)
+                        };
+                        p.fill_round_rect(
+                            Rect::new(r.x + i, r.y + i, d - 2 * i, d - 2 * i),
+                            d / 2 - i,
+                            Color::rgb(sw.color.0, sw.color.1, sw.color.2),
+                        );
+                        if self.focus == Some(hit) {
+                            transom_render::design::focus_ring(p, th, r, 15, th.background);
+                        }
+                        self.hits.push((r, hit));
+                        nodes.push((
+                            r,
+                            sw.acc.clone(),
+                            extra(
+                                ROLE_PUSHBUTTON,
+                                if sw.selected { STATE_SELECTED } else { 0 },
+                                String::new(),
+                                t("acc.press"),
+                            ),
+                            true,
+                            Some(hit),
+                        ));
+                    }
+                    let rows_n = (list.len() as i32 + per - 1) / per;
+                    if rows_n > 0 {
+                        y += rows_n * (d + gap) - gap + px(12);
+                    }
                 }
                 Row::Buttons(btns) => {
                     let ch = px(30);

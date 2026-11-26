@@ -86,31 +86,85 @@ const ATTACHED_RIM: u32 = 30;
 /// Krytie cierneho nadychu tmaveho skla (najhorsi pripad pre kontrast: biela stranka pod oknom).
 pub const DARK_TINT_ALPHA: u8 = 225;
 
-/// Najmensi kontrast textu na skle nad najhorsou strankou pod nim (rezerva pre karty a ovladace, ktore sklo zosvetluju).
-pub const TINT_MIN_CONTRAST: f32 = 5.0;
+/// Najmensi kontrast tlmeneho textu panela na skle nad najhorsou strankou pod nim (biela aj cierna).
+pub const TINT_MIN_CONTRAST: f32 = 4.5;
 
-/// Nadych skla z vlastnej farby listy: zachova jej odtien, ale stmavi ju (tmava tema, k takmer ciernej) alebo zosvetli
-/// (svetla tema, k bielej) prave natolko, aby text `fg` (najslabsi text panela) mal na skle kontrast aspoň
-/// [`TINT_MIN_CONTRAST`] nad bielou aj ciernou strankou pod nim pri kryti `alpha`. Ked to pri danom kryti nejde ani so
-/// zakladnou farbou, vrati zakladnu (ako sklo bez vlastnej farby).
-pub fn readable_tint(color: (u8, u8, u8), fg: (u8, u8, u8), dark: bool, alpha: u8) -> (u8, u8, u8) {
-    // tmava tema: stmavenie k ciernej (odtien aj sytost ostanu, ubuda len jas); svetla: zosvetlenie k bielej
-    let base = if dark { (0, 0, 0) } else { (255, 255, 255) };
+/// Tlmeny text skleneneho panela v tmavom / svetlom vzhlade (rovnake farby ako `Theme::glass_pass`).
+pub const GLASS_MUTED_DARK: (u8, u8, u8) = (0xB4, 0xBD, 0xC8);
+pub const GLASS_MUTED_LIGHT: (u8, u8, u8) = (0x3D, 0x46, 0x52);
+
+/// Farby textu skleneneho panela, ktore musia byt citatelne aj na karte (ako `Theme::glass_pass`, test v
+/// `transom-app` `glass_tests` to strazi): tmavy vzhlad - tlmeny, cerveny, akcentovy; svetly rovnako.
+const GLASS_TEXTS_DARK: [(u8, u8, u8); 3] =
+    [GLASS_MUTED_DARK, (0xFF, 0x8F, 0x86), (0x7C, 0xBC, 0xFF)];
+const GLASS_TEXTS_LIGHT: [(u8, u8, u8); 3] =
+    [GLASS_MUTED_LIGHT, (0x8E, 0x1F, 0x17), (0x00, 0x44, 0x8F)];
+/// Hlavny text a najsvetlejsia plocha pod nim (ovladac pod mysou) v tmavom / svetlom vzhlade: (text, biela s krytim).
+const GLASS_FG_DARK: ((u8, u8, u8), u8) = ((0xE8, 0xEC, 0xF1), 44);
+const GLASS_FG_LIGHT: ((u8, u8, u8), u8) = ((0x14, 0x18, 0x1E), 190);
+/// Karta na skle: biela s krytim (tmavy / svetly vzhlad).
+const GLASS_CARD_DARK: u8 = 20;
+const GLASS_CARD_LIGHT: u8 = 110;
+
+/// Najvyssie krytie, na ktore sa sklo s vlastnou farbou smie zvysit (stale jemne presvita).
+const TINT_MAX_ALPHA: u8 = 242;
+
+/// Sklo s vlastnou farbou listy: nadych, jeho krytie a ci ide o tmave sklo (svetly text) alebo svetle (tmavy text).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tinted {
+    pub tint: (u8, u8, u8),
+    pub alpha: u8,
+    pub dark: bool,
+}
+
+/// Nadych skla z vlastnej farby listy. Vzhlad (tmave / svetle sklo) urci sama farba - svetla farba da svetle sklo
+/// s tmavym textom aj v tmavej teme Windows. Odtien sa zachova: aby mal tlmeny text kontrast aspon
+/// [`TINT_MIN_CONTRAST`] nad bielou aj ciernou strankou pod oknom, najprv sa trochu zvysi krytie (najviac o 40, po
+/// [`TINT_MAX_ALPHA`]) a az potom sa farba postupne stmavi / zosvetli. Pri velmi nizkom krytí sa krytie zvysi az po
+/// [`TINT_MAX_ALPHA`] - citatelnost ma prednost pred priehladnostou, farba sa vsak nikdy nenahradi ciernou.
+pub fn tint_for(color: (u8, u8, u8), alpha: u8) -> Tinted {
+    let dark = contrast((255, 255, 255), color) >= contrast((0, 0, 0), color);
+    let (texts, (fg, hover), card, base) = if dark {
+        (GLASS_TEXTS_DARK, GLASS_FG_DARK, GLASS_CARD_DARK, (0, 0, 0))
+    } else {
+        (
+            GLASS_TEXTS_LIGHT,
+            GLASS_FG_LIGHT,
+            GLASS_CARD_LIGHT,
+            (255, 255, 255),
+        )
+    };
     let mix = |a: (u8, u8, u8), b: (u8, u8, u8), k: f32| {
         let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round() as u8;
         (m(a.0, b.0), m(a.1, b.1), m(a.2, b.2))
     };
-    let a = alpha as f32 / 255.0;
-    let over = |c: (u8, u8, u8), page: (u8, u8, u8)| mix(page, c, a);
-    let readable = |c: (u8, u8, u8)| {
-        [(0u8, 0u8, 0u8), (255, 255, 255)]
-            .iter()
-            .all(|&page| contrast(fg, over(c, page)) >= TINT_MIN_CONTRAST)
+    // panel, karta (tlmeny / cerveny / akcentovy text) a ovladac pod mysou (hlavny text) nad bielou aj ciernou strankou
+    let readable = |c: (u8, u8, u8), a: u8| {
+        let k = a as f32 / 255.0;
+        [(0u8, 0u8, 0u8), (255, 255, 255)].iter().all(|&page| {
+            let panel = mix(page, c, k);
+            let on_card = mix(panel, (255, 255, 255), card as f32 / 255.0);
+            let on_hover = mix(panel, (255, 255, 255), hover as f32 / 255.0);
+            texts.iter().all(|t| {
+                contrast(*t, panel) >= TINT_MIN_CONTRAST
+                    && contrast(*t, on_card) >= TINT_MIN_CONTRAST
+            }) && contrast(fg, on_hover) >= TINT_MIN_CONTRAST
+        })
     };
-    (0..=40)
-        .map(|i| mix(color, base, i as f32 / 40.0))
-        .find(|c| readable(*c))
-        .unwrap_or(if dark { (14, 14, 16) } else { (250, 250, 251) })
+    let lo = alpha.min(TINT_MAX_ALPHA);
+    let search = |hi: u8| {
+        (0..=40).find_map(|i| {
+            let c = mix(color, base, i as f32 / 40.0);
+            (lo..=hi)
+                .step_by(2)
+                .find(|a| readable(c, *a))
+                .map(|a| (c, a))
+        })
+    };
+    let (tint, alpha) = search(lo.saturating_add(40).min(TINT_MAX_ALPHA))
+        .or_else(|| search(TINT_MAX_ALPHA))
+        .unwrap_or((mix(color, base, 0.8), TINT_MAX_ALPHA));
+    Tinted { tint, alpha, dark }
 }
 
 impl GlassStyle {
@@ -536,34 +590,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_custom_bar_colour_tints_the_glass_but_text_stays_readable() {
-        let dark_muted = (0x98, 0xA3, 0xB0);
-        let light_muted = (0x50, 0x5B, 0x69);
+    fn a_custom_bar_colour_keeps_its_hue_on_glass_and_text_stays_readable() {
         for c in [
             (0x1F, 0x3A, 0x5F),
+            (0x24, 0x1B, 0x3A),
             (0xF3, 0xE9, 0xD2),
             (255, 0, 0),
+            (0, 112, 224),
             (0, 200, 120),
             (255, 255, 255),
             (0, 0, 0),
             (120, 40, 200),
+            (128, 128, 128),
         ] {
-            for (dark, fg) in [(true, dark_muted), (false, light_muted)] {
-                let t = readable_tint(c, fg, dark, DARK_TINT_ALPHA);
+            for alpha in [102u8, 178, 224, 255] {
+                let t = tint_for(c, alpha);
+                let fg = if t.dark {
+                    GLASS_MUTED_DARK
+                } else {
+                    GLASS_MUTED_LIGHT
+                };
+                assert!(t.alpha >= alpha.min(TINT_MAX_ALPHA), "{c:?} {t:?}");
                 for page in [(0u8, 0u8, 0u8), (255, 255, 255)] {
-                    let a = DARK_TINT_ALPHA as f32 / 255.0;
+                    let a = t.alpha as f32 / 255.0;
                     let m = |p: u8, x: u8| (p as f32 + (x as f32 - p as f32) * a).round() as u8;
-                    let seen = (m(page.0, t.0), m(page.1, t.1), m(page.2, t.2));
+                    let seen = (
+                        m(page.0, t.tint.0),
+                        m(page.1, t.tint.1),
+                        m(page.2, t.tint.2),
+                    );
                     assert!(
                         contrast(fg, seen) >= TINT_MIN_CONTRAST - 0.05,
-                        "{c:?} dark={dark} page={page:?} tint={t:?}"
+                        "{c:?} alpha={alpha} page={page:?} {t:?}"
                     );
                 }
             }
         }
-        // tmava modra lista v tmavej teme ostane modrastym sklom (nie ciernym)
-        let t = readable_tint((0x1F, 0x3A, 0x5F), dark_muted, true, DARK_TINT_ALPHA);
-        assert!(t.2 as u32 > 2 * t.0 as u32 && t.2 >= 30, "{t:?}");
+        // biela lista: svetle sklo (tmavy text), nie cierne
+        let t = tint_for((255, 255, 255), 224);
+        assert!(!t.dark && t.tint == (255, 255, 255), "{t:?}");
+        // modra ostane zretelne modra (nie takmer cierna), aj pri nizkom krytí
+        for alpha in [102u8, 224] {
+            let t = tint_for((0, 112, 224), alpha);
+            assert!(
+                t.dark && t.tint.2 >= 70 && t.tint.2 as u32 >= 2 * t.tint.1 as u32 && t.tint.0 < 10,
+                "{t:?}"
+            );
+        }
+        // tmava fialova pouzivatela sa nemeni vobec
+        assert_eq!(tint_for((0x24, 0x1B, 0x3A), 224).tint, (0x24, 0x1B, 0x3A));
     }
     use crate::layered::Area;
 

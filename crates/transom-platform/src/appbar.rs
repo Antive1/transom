@@ -144,6 +144,8 @@ pub enum BarEvent {
     TimeChanged,
     /// Zmenila sa systemova farebna schema (svetly/tmavy rezim).
     ThemeChanged,
+    /// Zmenilo sa pozadie plochy (`SPI_SETDESKWALLPAPER`): pod priehladnou listou moze byt ina farba.
+    WallpaperChanged,
     /// Zmenilo sa systemove nastavenie animacii (`SPI_SETCLIENTAREAANIMATION`) - pozri `system::animations_enabled`.
     AnimationsChanged,
     /// Zmenil sa stav "vybrany monitor nie je pripojeny" (`true` = lista je na primarnom ako zaloha; aplikacia to
@@ -710,6 +712,25 @@ pub fn bar_center_under_cursor() -> Option<(String, i32)> {
         .find(|(_, r)| pt.x >= r.left && pt.x < r.right)
         .or(rects.first())?;
     Some((id.clone(), (r.right - r.left) / 2))
+}
+
+/// Farba, na ktorej lezi text listy monitora `monitor_id`, ako ju naozaj vidno na obrazovke (median riadku tesne pod
+/// hornym okrajom listy - text ho takmer nezasiahne). Pri priehladnej liste je to plocha / okno pod nou. `None` = lista
+/// nie je viditelna alebo sa obrazovku nepodarilo precitat.
+pub fn bar_backdrop(monitor_id: &str) -> Option<(u8, u8, u8)> {
+    let (h, _) = st(|s| {
+        s.bars
+            .iter()
+            .find(|b| b.id == monitor_id)
+            .map(|b| (b.hwnd, b.dpi))
+    })
+    .flatten()?;
+    // SAFETY: citanie stavu vlastneho okna.
+    if !unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hw(h)) }.as_bool() {
+        return None;
+    }
+    let (r, _) = bar_geometry(monitor_id)?;
+    crate::glass::screen_color(r.left + 1, r.right - 1, r.top + 1)
 }
 
 pub(crate) fn bar_geometry(monitor_id: &str) -> Option<(RECT, u32)> {
@@ -1941,6 +1962,10 @@ unsafe extern "system" fn ctl_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
                 // SPI_SETCLIENTAREAANIMATION = 0x1043 (lParam nie je text)
                 if wp.0 == 0x1043 {
                     emit(BarEvent::AnimationsChanged);
+                }
+                // SPI_SETDESKWALLPAPER = 0x0014
+                if wp.0 == 0x0014 {
+                    emit(BarEvent::WallpaperChanged);
                 }
                 match setting_name(lp) {
                     Some(s) if s == "ImmersiveColorSet" => emit(BarEvent::ThemeChanged),

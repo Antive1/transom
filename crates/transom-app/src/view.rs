@@ -45,6 +45,8 @@ pub struct View<'a> {
     pub desktops: Option<(usize, usize)>,
     /// Pocasie; `None` = polozka sa nezobrazi.
     pub weather: Option<&'a crate::weather::Weather>,
+    /// Snimka animacie dazda / snehu pri pocasi (0 = staticky obrazok).
+    pub weather_phase: u8,
     /// Dostupna novsia verzia (ikona stahovania uplne vpravo); `None` = ikona sa nezobrazi.
     pub update: Option<&'a str>,
 }
@@ -463,7 +465,7 @@ pub fn build_items(v: &View) -> Vec<StatusItem> {
             ItemId::Weather,
             Side::Right,
             vec![Part::File {
-                glyph: Glyph::Weather,
+                glyph: crate::weather::glyph(w.code, v.weather_phase),
                 muted: false,
                 label: crate::weather::temp(w.temp),
                 name: tf(

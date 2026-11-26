@@ -77,7 +77,8 @@ glass too, or follow the Windows theme or your own colour.
 - 🕒 **Clock and calendar** – date, calendar popover, events from your own private ICS link (Google, Outlook).
 - 🔍 **Search** – a fast, keyboard-first launcher (**Alt+Space**): apps, files from the Windows index, Settings pages, notes.
 - 🔊 **Audio** – output device, system volume, per-app mixer, sound profiles, Bluetooth audio connect.
-- 🔋 **Batteries** – laptop battery plus wireless mice, keyboards, headsets and controllers (Bluetooth, Razer, Logitech, NuPhy,
+- 🎨 **Colours** – an eyedropper with a magnifier for any pixel on the screen, HEX / RGB / HSL and a colour history.
+- 🔋 **Batteries** – green while charging, red when low – laptop battery plus wireless mice, keyboards, headsets and controllers (Bluetooth, Razer, Logitech, NuPhy,
   standard HID).
 - 📊 **Extras** (off by default) – CPU / RAM / GPU / network, keyboard layout and Caps Lock, timer / pomodoro / stopwatch,
   monitor brightness (DDC/CI), microphone and camera in use, weather.

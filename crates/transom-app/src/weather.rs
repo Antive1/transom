@@ -30,6 +30,27 @@ pub struct Weather {
     pub days: Vec<Day>,
 }
 
+/// Pada dazd / sneh (kod WMO)? `Some(true)` = sneh, `Some(false)` = dazd alebo mrholenie, `None` = nic nepada.
+pub fn precip(code: u32) -> Option<bool> {
+    match code {
+        51..=67 | 80..=82 => Some(false),
+        71..=77 | 85 | 86 => Some(true),
+        _ => None,
+    }
+}
+
+/// Ikona polozky na liste podla stavu: slnko, oblak, blesk, alebo oblak s padajucimi kvapkami / vlockami (snimka
+/// `phase`).
+pub fn glyph(code: u32, phase: u8) -> transom_core::item::Glyph {
+    use transom_core::item::Glyph;
+    match (code, precip(code)) {
+        (_, Some(snow)) => Glyph::Precip { snow, phase },
+        (0, _) => Glyph::WeatherClear,
+        (95..=99, _) => Glyph::WeatherStorm,
+        _ => Glyph::Weather,
+    }
+}
+
 /// Kluc popisu stavu podla kodu WMO.
 pub fn desc_key(code: u32) -> &'static str {
     match code {

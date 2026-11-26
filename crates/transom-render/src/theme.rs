@@ -50,6 +50,8 @@ pub struct Theme {
     pub hover: Color,
     /// Nizka bateria.
     pub low: Color,
+    /// Nabijajuca sa bateria (zelena).
+    pub good: Color,
     /// Pozadie stlacenej casti.
     pub pressed: Color,
     /// Ikona zakazaneho tlacidla (nepodporovany prikaz).
@@ -95,6 +97,7 @@ impl Theme {
             muted: Color::hex(0x98A3B0),
             hover: Color::hex(0x2A313B),
             low: Color::hex(0xF2766E),
+            good: Color::hex(0x6CCB5F),
             pressed: Color::hex(0x20262E),
             disabled: Color::hex(0x5A626D),
             placeholder: Color::hex(0x232933),
@@ -126,6 +129,7 @@ impl Theme {
             muted: Color::hex(0x505B69),
             hover: Color::hex(0xDFE4EA),
             low: Color::hex(0xA8281F),
+            good: Color::hex(0x107C10),
             pressed: Color::hex(0xCDD3DB),
             disabled: Color::hex(0xA6AEB8),
             placeholder: Color::hex(0xE3E7EC),
@@ -178,6 +182,7 @@ impl Theme {
             // a akcentovy text, aby mali aj na karte a riadku pod mysou kontrast >= 4,5 : 1
             t.muted = Color::hex(0xB4BDC8);
             t.low = Color::hex(0xFF8F86);
+            t.good = Color::hex(0x7DD870);
             t.accent_text = Color::hex(0x7CBCFF);
         } else {
             t.surface = o(lift, 110);
@@ -192,6 +197,7 @@ impl Theme {
             // pod svetlym sklom moze byt aj cierna stranka: tmavsi tlmeny, cerveny a akcentovy text
             t.muted = Color::hex(0x3D4652);
             t.low = Color::hex(0x8E1F17);
+            t.good = Color::hex(0x0B5A0B);
             t.accent_text = Color::hex(0x00448F);
         }
         t.selected = o(self.accent, if self.dark { 70 } else { 50 });
@@ -220,6 +226,7 @@ impl Theme {
         // k farbe hlavneho textu, kym nedosiahnu 4,5 : 1 (akcent 3 : 1) - alebo kym nie su rovnake ako hlavny text
         t.muted = toward(t.muted, t.foreground, bg, 4.5);
         t.low = toward(t.low, t.foreground, bg, 4.5);
+        t.good = toward(t.good, t.foreground, bg, 3.0);
         t.accent = toward(t.accent, t.foreground, bg, 3.0);
         t
     }
@@ -274,6 +281,7 @@ impl Theme {
         t.disabled = crate::scene::mix(fg, bg, 0.4);
         t.placeholder = crate::scene::mix(fg, bg, 0.25);
         t.low = toward(t.low, fg, bg, 4.5);
+        t.good = toward(t.good, fg, bg, 3.0);
         t.accent = toward(t.accent, fg, bg, 3.0);
         t
     }
@@ -287,6 +295,7 @@ impl Theme {
             foreground: dim(self.foreground, 4.5),
             muted: dim(self.muted, 4.5),
             low: dim(self.low, 4.5),
+            good: dim(self.good, 3.0),
             accent: dim(self.accent, 3.0),
             disabled: crate::scene::mix(self.disabled, bg, 0.75),
             ..self

@@ -8,6 +8,21 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+### Added
+- Colours panel: pick a colour anywhere on the screen with a real eyedropper cursor and a magnifier, see its HEX, RGB and
+  HSL, copy it, and keep a history of the colours you picked.
+- Rain and snow on the bar: small falling drops or flakes under the cloud; sun and storm get their own icons.
+
+### Changed
+- The battery is green while it charges and red below 20 %.
+- Glass in your own bar colour keeps the colour much better: a light colour gives light glass with dark text, and a dark
+  colour no longer turns almost black.
+- A fully or mostly transparent bar picks dark or light text by what is under it, so it stays readable on a light wallpaper.
+- The colour picker no longer shows in the island; it opens the Colours panel.
+
+### Fixed
+- Clicking an empty spot or another item on the bar now closes an open panel or island menu.
+
 ## [0.1.2] - 2026-11-26
 
 ### Changed

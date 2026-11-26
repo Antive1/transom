@@ -18,8 +18,8 @@ use crate::audio_pop::{fit, st};
 
 pub const PERIPH_W_LP: i32 = 360;
 pub const PERIPH_H_LP: i32 = 480;
-/// Uroven pod touto hranicou je "nizka" (cervena vypln a slovo, nie len farba).
-pub const LOW_PERCENT: u8 = 15;
+/// Uroven do tejto hranice vratane (pod 20 %) je "nizka" (cervena vypln a slovo, nie len farba).
+pub const LOW_PERCENT: u8 = transom_render::scene::BATTERY_LOW_BELOW - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeriphHit {
@@ -228,6 +228,8 @@ impl PeriphPanel {
                 if fw > 0 {
                     let c = if d.stale {
                         th.muted
+                    } else if d.charging {
+                        th.good
                     } else if d.is_low(LOW_PERCENT) {
                         th.low
                     } else {

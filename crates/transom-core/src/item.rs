@@ -175,6 +175,16 @@ pub enum Glyph {
     Focus,
     /// Pocasie (oblak).
     Weather,
+    /// Pocasie: jasno (slnko).
+    WeatherClear,
+    /// Pocasie: burka (blesk).
+    WeatherStorm,
+    /// Pocasie: dazd / sneh - oblak, pod nim padaju kvapky / vlocky (snimka `phase` z
+    /// `transom_render::scene::PRECIP_FRAMES`).
+    Precip {
+        snow: bool,
+        phase: u8,
+    },
     /// Stahovanie (dostupna aktualizacia).
     Download,
 }

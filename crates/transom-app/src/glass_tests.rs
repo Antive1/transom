@@ -97,3 +97,74 @@ fn glass_pass_planes_are_translucent_white_or_black_and_never_holes_in_a_card() 
         assert_eq!(k.accent, w.accent);
     }
 }
+
+/// Sklo vo vlastnej farbe listy (`glass::tint_for`): text na paneli, karte a ovladacoch citatelny nad bielou aj ciernou
+/// strankou (najhorsie pripady), pre svetle, tmave a stredne farby a rozne krytie.
+#[test]
+fn text_on_tinted_glass_and_its_cards_stays_readable() {
+    let mut bad = Vec::new();
+    for bar in [
+        (0u8, 112u8, 224u8),
+        (220, 40, 40),
+        (128, 128, 128),
+        (30, 160, 80),
+        (250, 200, 0),
+        (255, 255, 255),
+        (0x24, 0x1B, 0x3A),
+        (120, 40, 200),
+        (0, 180, 200),
+    ] {
+        for alpha in [102u8, 178, 224, 255] {
+            let t = transom_platform::glass::tint_for(bar, alpha);
+            let th = if t.dark {
+                Theme::dark()
+            } else {
+                Theme::light()
+            };
+            let tint = Color::rgb(t.tint.0, t.tint.1, t.tint.2);
+            let (k, w) = (
+                th.glass_pass(Color::rgb(0, 0, 0)),
+                th.glass_pass(Color::rgb(255, 255, 255)),
+            );
+            for page in [Color::rgb(255, 255, 255), Color::rgb(0, 0, 0)] {
+                let base = mix(page, tint, t.alpha as f32 / 255.0);
+                let planes = [
+                    ("panel", base),
+                    ("card", over(k.surface, w.surface, base)),
+                    ("control", over(k.control, w.control, base)),
+                    ("hover", over(k.hover, w.hover, base)),
+                    (
+                        "control_hover",
+                        over(k.control_hover, w.control_hover, base),
+                    ),
+                ];
+                for (i, (pn, bg)) in planes.into_iter().enumerate() {
+                    let texts: &[(&str, Color)] = if i < 2 {
+                        &[
+                            ("foreground", k.foreground),
+                            ("muted", k.muted),
+                            ("low", k.low),
+                            ("accent_text", k.accent_text),
+                        ]
+                    } else {
+                        &[("foreground", k.foreground)]
+                    };
+                    for &(tn, fg) in texts {
+                        let r = ratio(fg, bg);
+                        if r < 4.5 {
+                            bad.push(format!(
+                                "{bar:?}@{alpha} {tn} na {pn} nad {page:?}: {r:.2} ({t:?})"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "slaby kontrast ({}):\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}

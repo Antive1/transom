@@ -66,6 +66,22 @@ pub fn glass_rgba(
     flare_lp: i32,
     paint: &mut dyn FnMut(&mut dyn transom_render::Painter, &Theme),
 ) -> (i32, Vec<u8>) {
+    glass_rgba_tinted(w, h, dpi, th, rim, corner_lp, flare_lp, None, paint)
+}
+
+/// Ako [`glass_rgba`], so sklom vo vlastnej farbe listy (`glass::tint_for`).
+#[allow(clippy::too_many_arguments)]
+pub fn glass_rgba_tinted(
+    w: i32,
+    h: i32,
+    dpi: u32,
+    th: &Theme,
+    rim: transom_platform::glass::Rim,
+    corner_lp: i32,
+    flare_lp: i32,
+    tint: Option<transom_platform::glass::Tinted>,
+    paint: &mut dyn FnMut(&mut dyn transom_render::Painter, &Theme),
+) -> (i32, Vec<u8>) {
     use transom_platform::glass::Rim;
     let attached = rim == Rim::Attached;
     let fl = if attached {
@@ -112,6 +128,10 @@ pub fn glass_rgba(
     );
     st.corner = corner_lp * dpi as i32 / 96;
     st.flare = fl;
+    if let Some(t) = tint {
+        st.tint = t.tint;
+        st.tint_alpha = t.alpha;
+    }
     let mut out = vec![0u32; (fw * h) as usize];
     transom_platform::glass::compose(
         &k,
@@ -449,6 +469,62 @@ mod tests {
                     let mut p = GdiPainter::new(surf.dc, Size { w, h }, dpi).grayscale(*gray);
                     render_bar_with(&mut p, th, &items, ui, None);
                     save(&dir, &format!("{name}{state}-{dpi}"), &surf);
+                }
+            }
+        }
+    }
+
+    /// Pocasie na liste (jasno, oblacno, dazd a sneh v niekolkych snimkach animacie, burka) a bateria (bezna,
+    /// nabijanie, pod 20 %) v tmavej a svetlej teme.
+    #[test]
+    #[ignore]
+    fn gallery_weather_battery() {
+        let _g = crate::test_lang::guard();
+        let Some(dir) = dir() else { return };
+        let cases: Vec<(String, u32, u8, Battery)> = {
+            let b = |p: u8, c: bool| Battery {
+                percent: Some(p),
+                charging: c,
+                on_ac: c,
+                saver: false,
+            };
+            let mut v = vec![
+                ("clear".to_string(), 0, 0, b(76, false)),
+                ("cloudy".to_string(), 3, 0, b(64, true)),
+                ("storm".to_string(), 95, 0, b(19, false)),
+            ];
+            for f in [0u8, 3, 6, 9] {
+                v.push((format!("rain-{f:02}"), 63, f, b(12, true)));
+            }
+            for f in [0u8, 9, 18, 27] {
+                v.push((format!("snow-{f:02}"), 73, f, b(20, false)));
+            }
+            v
+        };
+        for dpi in [144u32] {
+            for (dark, th) in themes() {
+                for (name, code, phase, bat) in &cases {
+                    let w = crate::weather::Weather {
+                        place: "Test".into(),
+                        temp: -2.0,
+                        code: *code,
+                        days: Vec::new(),
+                    };
+                    let view = View {
+                        clock: "17:25",
+                        battery: Some(*bat),
+                        weather: Some(&w),
+                        weather_phase: *phase,
+                        ..Default::default()
+                    };
+                    let mut layout = transom_config::Layout::default();
+                    layout.set_visible("weather", true);
+                    let items = arrange(build_items(&view), &layout);
+                    let (bw, h) = (px(600, dpi), px(28, dpi));
+                    let surf = Surface::new(bw, h);
+                    let mut p = GdiPainter::new(surf.dc, Size { w: bw, h }, dpi);
+                    let _ = render_bar_with(&mut p, &th, &items, Interaction::default(), None);
+                    save(&dir, &format!("wx-{name}-{}-{dpi}", tag(dark)), &surf);
                 }
             }
         }

@@ -453,6 +453,9 @@ pub fn elide(p: &mut dyn Painter, text: &str, st: &TextStyle, w: i32) -> String 
 /// Maly symbol (zariadenie, subor, klavesnica) na stred slotu `r`. Sirsi znak (napr. Caps Lock) presahuje slot
 /// rovnomerne do okrajov casti namiesto orezania.
 fn draw_slot_glyph(p: &mut dyn Painter, g: Glyph, r: Rect, color: Color) {
+    if let Glyph::Precip { snow, phase } = g {
+        return draw_precip(p, snow, phase, r, color);
+    }
     let st = TextStyle {
         font: Font::Icons,
         size_lp: DEVICE_GLYPH_LP,
@@ -470,6 +473,69 @@ fn draw_slot_glyph(p: &mut dyn Painter, g: Glyph, r: Rect, color: Color) {
         _ => 0,
     };
     p.draw_text(ch, Rect::new(r.x + (r.w - w) / 2, r.y + dy, w, r.h), &st);
+}
+
+/// Pocet snimok animacie dazda / snehu (jeden cyklus snehu; dazd ich prejde 3x rychlejsie).
+pub const PRECIP_FRAMES: u8 = 36;
+/// Dlzka snimky animacie dazda / snehu (ms): ~12 snimok za sekundu, cyklus snehu 3 s.
+pub const PRECIP_FRAME_MS: u32 = 83;
+
+/// Castice pod oblakom v snimke `phase`: (vodorovny posun, zvisly posun od spodku oblaka, krytie 0-1) v lp. Tri
+/// stlpce s posunutou fazou; kvapka / vlocka sa pri konci drahy vytrati. Cista funkcia (testy a galeria).
+pub fn precip_particles(snow: bool, phase: u8) -> [(f32, f32, f32); 3] {
+    const FALL_LP: f32 = 7.0;
+    let n = PRECIP_FRAMES as f32;
+    let speed = if snow { 1.0 } else { 3.0 };
+    std::array::from_fn(|i| {
+        let t = ((phase as f32 * speed / n) + i as f32 / 3.0).fract();
+        let x = (i as f32 - 1.0) * 4.0;
+        // sneh sa jemne kolise, dazd pada sikmo
+        let dx = if snow {
+            (t * std::f32::consts::TAU + i as f32).sin() * 0.9
+        } else {
+            -t * 1.5
+        };
+        let fade = if t > 0.7 { (1.0 - t) / 0.3 } else { 1.0 };
+        (x + dx, t * FALL_LP, fade)
+    })
+}
+
+/// Oblak (mensi, posunuty hore) a pod nim padajuce kvapky / vlocky.
+fn draw_precip(p: &mut dyn Painter, snow: bool, phase: u8, r: Rect, color: Color) {
+    let s = p.scale();
+    let st = TextStyle {
+        font: Font::Icons,
+        size_lp: DEVICE_GLYPH_LP - 1.0,
+        bold: false,
+        color,
+        align: HAlign::Center,
+    };
+    let mut buf = [0; 4];
+    let ch: &str = glyph_char(Glyph::Weather).encode_utf8(&mut buf);
+    let w = p.measure_text(ch, &st).w.max(r.w);
+    let up = px(4.0, s);
+    p.draw_text(ch, Rect::new(r.x + (r.w - w) / 2, r.y - up, w, r.h), &st);
+    // spodok oblaka (znak Cloud siaha ~0,3 velkosti pod stred)
+    let cx = r.x as f32 + r.w as f32 / 2.0;
+    let top = r.y as f32 + r.h as f32 / 2.0 - up as f32 + (DEVICE_GLYPH_LP - 1.0) * 0.3 * s;
+    for (dx, dy, a) in precip_particles(snow, phase) {
+        if a <= 0.02 {
+            continue;
+        }
+        let x = (cx + dx * s).round() as i32;
+        let y = (top + (dy + 1.0) * s).round() as i32;
+        let (w, h) = if snow {
+            (px(2.0, s).max(2), px(2.0, s).max(2))
+        } else {
+            ((s.round() as i32).max(1), px(3.0, s).max(2))
+        };
+        // krytie cez masku (sklo aj vrstvene okno: skutocna alfa, nie zmes s odhadnutym pozadim)
+        let cov: Vec<u8> = crate::icons::round_rect_coverage(w, h, w.min(h) as f32 / 2.0)
+            .iter()
+            .map(|c| (*c as f32 * a).round() as u8)
+            .collect();
+        p.blend_mask(Rect::new(x - w / 2, y, w, h), &cov, color);
+    }
 }
 
 pub fn glyph_char(g: Glyph) -> char {
@@ -515,8 +581,10 @@ pub fn glyph_char(g: Glyph) -> char {
         Glyph::Desktops => '\u{E7C4}',
         // Segoe Fluent Icons: QuietHours (mesiac)
         Glyph::Focus => '\u{E708}',
-        // Segoe Fluent Icons: Cloud
-        Glyph::Weather => '\u{E753}',
+        // Segoe Fluent Icons: Cloud (aj oblak nad dazdom / snehom), Brightness (slnko), LightningBolt
+        Glyph::Weather | Glyph::Precip { .. } => '\u{E753}',
+        Glyph::WeatherClear => '\u{E706}',
+        Glyph::WeatherStorm => '\u{E945}',
         // Segoe Fluent Icons: Download
         Glyph::Download => '\u{E896}',
     }
@@ -589,7 +657,12 @@ fn px(v: f32, scale: f32) -> i32 {
     (v * scale).round() as i32
 }
 
-/// Nakresli symbol baterie: obrys, vystupok a vyplnenie podla percenta (pri <= 15 % farbou `low`).
+/// Bateria pod touto urovnou (%) je nizka: cervena vypln (ak sa nenabija).
+pub const BATTERY_LOW_BELOW: u8 = 20;
+
+/// Nakresli symbol baterie: obrys, vystupok a vyplnenie podla percenta. Vypln: pri nabijani `good` (zelena), pod
+/// [`BATTERY_LOW_BELOW`] % `low` (cervena), inak farba popredia.
+#[allow(clippy::too_many_arguments)]
 fn draw_battery(
     p: &mut dyn Painter,
     area: Rect,
@@ -598,6 +671,7 @@ fn draw_battery(
     fg: Color,
     bg: Color,
     low: Color,
+    good: Color,
 ) {
     let s = p.scale();
     let mut x = area.x;
@@ -626,7 +700,13 @@ fn draw_battery(
     let inner_w = w - 4 * t;
     let fill = (inner_w * i32::from(percent.min(100)) + 50) / 100;
     if fill > 0 {
-        let c = if percent <= 15 && !charging { low } else { fg };
+        let c = if charging {
+            good
+        } else if percent < BATTERY_LOW_BELOW {
+            low
+        } else {
+            fg
+        };
         p.fill_rect(Rect::new(x + 2 * t, y + 2 * t, fill, h - 4 * t), c);
     }
 }
@@ -757,6 +837,9 @@ fn media_icon(g: Glyph) -> Option<MediaIcon> {
         | Glyph::Desktops
         | Glyph::Focus
         | Glyph::Weather
+        | Glyph::WeatherClear
+        | Glyph::WeatherStorm
+        | Glyph::Precip { .. }
         | Glyph::Download => None,
     }
 }
@@ -1134,6 +1217,7 @@ pub fn render_bar_with(
                     theme.foreground,
                     bg,
                     theme.low,
+                    theme.good,
                 );
             }
             Part::Device {
@@ -1156,10 +1240,11 @@ pub fn render_bar_with(
                 draw_slot_glyph(p, *glyph, Rect::new(x, 0, gw, size.h), fg);
                 x += gw;
                 let bw = battery_width(scale, *charging);
-                // `draw_battery` kresli farbou `low` pod 15 %; ta je cervena len pri nizkej urovni zariadenia, inak
-                // ostava farba popredia (stav "nizka" nesie aj pristupny nazov a panel, nie len farba)
+                // nizka uroven cervena a nabijanie zelene len pri aktualnom udaji (zastaraly udaj je tlmeny); stav "nizka"
+                // nesie aj pristupny nazov a panel, nie len farba
                 let pct = percent.unwrap_or(0);
                 let low_color = if *low { theme.low } else { fg };
+                let good_color = if *muted { fg } else { theme.good };
                 draw_battery(
                     p,
                     Rect::new(x, 0, bw, size.h),
@@ -1168,6 +1253,7 @@ pub fn render_bar_with(
                     fg,
                     bg,
                     low_color,
+                    good_color,
                 );
                 x += bw + px(DEVICE_TEXT_GAP, scale);
                 let st = text_style(theme, ItemId::Peripherals, tone);

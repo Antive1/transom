@@ -4,7 +4,7 @@ use crate::pop_kit::{Btn, Cmd, Row};
 use crate::timer::{self, Countdown, Finished, PomoCfg, MIN};
 use crate::{
     log, notifier, popup, schedule_timer, App, HOTKEY_MIC, N_BRIGHT, N_PRIV, N_SYSMON, POP_BRIGHT,
-    POP_EDIT, POP_PRIVACY, POP_TIMER, POP_UPDATE, T_TIMER,
+    POP_COLORS, POP_EDIT, POP_PRIVACY, POP_TIMER, POP_UPDATE, T_TIMER,
 };
 use transom_i18n::{t, tf};
 use transom_mixer::capture::{PrivService, PrivSnap};
@@ -17,7 +17,7 @@ pub const KIT_W_LP: i32 = 340;
 pub fn is_kit(kind: u32) -> bool {
     matches!(
         kind,
-        POP_TIMER | POP_BRIGHT | POP_PRIVACY | POP_EDIT | POP_UPDATE
+        POP_TIMER | POP_BRIGHT | POP_PRIVACY | POP_EDIT | POP_UPDATE | POP_COLORS
     )
 }
 
@@ -901,6 +901,7 @@ impl App {
                 .update_view()
                 .map(|v| crate::update_pop::rows(&v))
                 .unwrap_or_default(),
+            POP_COLORS => self.colors_rows(),
             POP_PRIVACY => priv_rows(
                 &self.privacy_snapshot(),
                 self.config.privacy.hotkey().map(|h| h.label()),
@@ -924,6 +925,10 @@ impl App {
     pub(crate) fn kit_cmd(&mut self, kind: u32, cmd: Cmd) {
         if cmd == Cmd::Click(crate::pop_kit::BACK) {
             self.tools_home();
+            return;
+        }
+        if kind == POP_COLORS {
+            self.colors_cmd(cmd);
             return;
         }
         if kind == POP_EDIT {

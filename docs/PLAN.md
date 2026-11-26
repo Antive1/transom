@@ -2553,6 +2553,26 @@ z registra pri otvorení okna (nie je v konfigurácii).
 - **NÁHĽAD:** `transom-settings --shot … --png --full` (snímky stránky v tmavej aj svetlej téme).
 - **Neoverené naživo:** skutočné prvé spustenie na čistom PC (otvorenie stránky z lišty), prepnutie autoštartu z okna.
 
+### 8.36 Farby, počasie, batéria a čitateľnosť (2026-11-26, nevydané)
+
+- **Panel Farby** (`colors_pop.rs`, sada `pop_kit`): veľká vzorka, HEX / RGB / HSL, kopírovanie, história (najviac 24,
+  `tools\colors\history.json`, verzované ako ostatné indexy nástrojov). Kapátko už nepoužíva ostrov: panel sa zavrie,
+  po výbere sa otvorí znova s novou farbou.
+- **Kapátko** (`picker.rs`): okno cez celú virtuálnu obrazovku s krytím 1/255 vlastní kurzor (vlastný kurzor pipety z
+  `CreateIconIndirect`, nie `SetSystemCursor` - pád by nechal kurzor zmenený), neaktivuje sa a je vylúčené zo snímania
+  (`WDA_EXCLUDEFROMCAPTURE`), rovnako lupa 11 x 11 bodov. Meranie je presné aj s nimi (test `live_sampling_...`).
+  Esc len počas výberu cez `RegisterHotKey` (žiadny klávesnicový hák).
+- **Sklo vo vlastnej farbe** (`glass::tint_for`): vzhľad podľa farby (svetlá farba = svetlé sklo s tmavým textom),
+  najprv sa zvýši krytie (najviac o 40, po 242), až potom sa farba stmaví / zosvetlí; kontrast 4,5 : 1 pre tlmený,
+  červený a akcentový text na paneli aj karte a hlavný text na ovládači pod myšou, nad bielou aj čiernou stránkou.
+- **Priehľadná lišta** (krytie pod 50 %, automatický text, bez skla): medián riadku tesne pod horným okrajom lišty na
+  obrazovke = to, čo je pod ňou; text podľa `Theme::on_background`. Meria sa po štarte, zmene tapety
+  (`SPI_SETDESKWALLPAPER`), nastavení, konci celoobrazovkovej aplikácie a najviac raz za 20 s pri tiku.
+- **Počasie**: ikona podľa kódu WMO; pri daždi / snehu kvapky / vločky (`precip_particles`, čistá funkcia) ~12 snímok/s,
+  prekresľuje sa len položka počasia, nie pri vypnutých animáciách Windows ani skrytej lište.
+- **Batéria**: nabíjanie zelené (`Theme::good`), pod 20 % červené (aj „nízka“ pri perifériách od 19 %).
+- **Klik inde na lište** zavrie otvorený panel aj menu ostrova (lišta okno neaktivuje, panel by inak ostal otvorený).
+
 ## 9. Cargo workspace
 
 ```

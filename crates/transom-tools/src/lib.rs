@@ -8,6 +8,7 @@
 //! Pravidla: nic sa neposiela ani nelogue; obsah (cesty, texty, poznamky, obrazky) zije len v `%LOCALAPPDATA%\transom\tools` a
 //! nikdy v `config.json`, exporte nastaveni ani archive AI. Povodne subory pouzivatela sa nikdy nemenia ani nemazu.
 pub mod clipboard;
+pub mod colors;
 pub mod lane;
 pub mod library;
 pub mod names;

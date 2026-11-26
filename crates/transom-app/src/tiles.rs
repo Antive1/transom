@@ -91,7 +91,9 @@ impl App {
         let out = self.act(action, at);
         // panely otvorene z Nastrojov maju sipku spat
         match action {
-            Action::TimerPanel | Action::BrightnessPanel => self.kit.back = true,
+            Action::TimerPanel | Action::BrightnessPanel | Action::ColorPick => {
+                self.kit.back = true
+            }
             Action::WeatherOpen => self.weather_back = true,
             _ => {}
         }

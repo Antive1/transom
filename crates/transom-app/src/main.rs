@@ -16,6 +16,7 @@ mod bar_edit;
 mod bar_stress_tests;
 mod caldata;
 mod clip_notch;
+mod colors_pop;
 mod extras;
 #[cfg(test)]
 mod extras_tests;
@@ -137,8 +138,6 @@ const KEYS_POLL_MS: u32 = 250;
 const T_TIMER: u32 = 14;
 /// Kratka odlozka pred rozbalenim vybezku odlozenych suborov (prejdenie mysou cez listu ho neotvori).
 const T_STASH: u32 = 15;
-/// Koniec kratkeho oznamenia vo vybezku (hlasitost, casovac, udalost).
-const T_INFO: u32 = 16;
 /// Cakanie na snimku z vyrezu obrazovky (schranka sa kontroluje kazdych 400 ms, najviac 90 s).
 const T_SNIP: u32 = 17;
 /// Obnova aktivneho okna a virtualnych ploch (kazdu sekundu, len ked su polozky v liste).
@@ -153,6 +152,10 @@ const T_EQ: u32 = 21;
 const T_MEDIA: u32 = 22;
 /// Test `--test-update`: kroky scenara simulovanej aktualizacie.
 const T_TESTUPD: u32 = 23;
+/// Snimka animacie dazda / snehu pri pocasi na liste.
+const T_WEATHER: u32 = 24;
+/// Odmeranie farby pod priehladnou listou (kratko po starte, zmene pozadia plochy alebo nastaveni).
+const T_UNDER: u32 = 25;
 /// Kod notifikacie z media vlakna.
 const N_MEDIA: u32 = 1;
 /// Prebudenie presneho casovaca snimok posuvneho textu (`transom_platform::FrameTimer`).
@@ -220,6 +223,8 @@ const POP_EDIT: u32 = 11;
 const POP_WEATHER: u32 = 12;
 /// Panel dostupnej aktualizacie (ikona uplne vpravo, oznamenie, polozka menu).
 const POP_UPDATE: u32 = 13;
+/// Panel Farby (kapatko a historia farieb).
+const POP_COLORS: u32 = 14;
 /// Polozky kontextoveho menu.
 const MENU_SETTINGS: u32 = 1;
 const MENU_CUSTOMIZE: u32 = 3;
@@ -330,6 +335,29 @@ fn is_overflow_button(f: &input::Focused) -> bool {
 }
 
 /// Panel zo sady pre akciu polozky.
+/// Akcia otvara / zatvara panel pod listou (klik na nu panel prepne, nezatvori sa ako klik inde na liste).
+fn opens_panel(a: Action) -> bool {
+    matches!(
+        a,
+        Action::Calendar
+            | Action::AiPanel
+            | Action::AudioPanel
+            | Action::PeripheralsPanel
+            | Action::ToolsPanel
+            | Action::ToolsShelf
+            | Action::ToolsClipboard
+            | Action::ToolsNotes
+            | Action::ToolsShots
+            | Action::TimerPanel
+            | Action::BrightnessPanel
+            | Action::PrivacyPanel
+            | Action::WeatherOpen
+            | Action::UpdatePanel
+            | Action::ColorPick
+            | Action::Launcher
+    )
+}
+
 fn kit_kind_for(a: Action) -> Option<u32> {
     match a {
         Action::TimerPanel => Some(POP_TIMER),
@@ -435,6 +463,15 @@ struct App {
     frame_timer_tried: bool,
     /// Posledne zalogovane 5 s okno diagnostiky plynulosti.
     stats_logged: u64,
+    /// Panel Farby: historia, vybrana farba, kde sa otvoril.
+    colors: colors_pop::ColorsState,
+    /// Priehladna lista: farba, ktora je pod nou naozaj vidno (podla monitora) - text sa jej prisposobi.
+    under: HashMap<String, (u8, u8, u8)>,
+    under_at: Option<Instant>,
+    /// Animacia dazda / snehu: zaciatok (snimka sa pocita z casu) a posledna nakreslena snimka. `None` = nebezi.
+    wx_anim: Option<(Instant, u8)>,
+    /// `--sim-weather <kod WMO>` (len test vzhladu): kod stavu namiesto skutocneho.
+    sim_weather: Option<u32>,
     /// Windows: animacie su vypnute -> text sa neposuva (staticky s "...").
     reduced_motion: bool,
     /// Listy skryte plnou obrazovkou (animacia sa tam nekresli).
@@ -516,8 +553,6 @@ struct App {
     clip_notch: clip_notch::ClipNotch,
     /// Co vybezok prave ukazuje (pri prezerani).
     notch_view: NotchView,
-    /// Kratke oznamenie vo vybezku (hlasitost, koniec casovaca, udalost).
-    notch_info: Option<info_notch::Info>,
     /// Udalosti, ktore uz vybezok ohlasil (zaciatok; nazov sa nikde neuklada ani nelogguje).
     announced: Vec<i64>,
     /// Predpoved otvorena z Nastrojov: sipka spat.
@@ -611,6 +646,11 @@ impl App {
             paints: 0,
             ticker: ticker::Ticker::default(),
             stats_logged: 0,
+            colors: Default::default(),
+            under: HashMap::new(),
+            under_at: None,
+            wx_anim: None,
+            sim_weather: arg("--sim-weather").and_then(|v| v.trim().parse().ok()),
             frame_timer: None,
             frame_timer_tried: false,
             reduced_motion: !transom_platform::system::animations_enabled(),
@@ -654,7 +694,6 @@ impl App {
             media_notch: media_notch::MediaNotch::default(),
             clip_notch: clip_notch::ClipNotch::default(),
             notch_view: NotchView::Stash,
-            notch_info: None,
             announced: Vec::new(),
             popover_anchor: None,
             weather_back: false,
@@ -925,6 +964,73 @@ impl App {
 
     /// Jeden snimok posuvneho textu: prekresli len usek textu na lištach, kde sa posun zmenil, a naplanuje dalsi
     /// snimok (alebo nic, ak sa nehybe nic - pauza na konci textu, staticky text, pozastavene prehravanie).
+    /// Aktualne pocasie (so simulovanym kodom stavu pri `--sim-weather`).
+    fn weather_now(&self) -> Option<weather::Weather> {
+        let mut w = self.weather.as_ref().and_then(|w| w.snapshot());
+        if let Some(code) = self.sim_weather {
+            let w = w.get_or_insert_with(|| weather::Weather {
+                place: "Test".into(),
+                temp: 1.0,
+                code,
+                days: Vec::new(),
+            });
+            w.code = code;
+        }
+        w
+    }
+
+    /// Spusti / zastavi animaciu dazda / snehu: bezi len ked naozaj pada, polozka je na liste, lista je viditelna aspon
+    /// na jednom monitore a Windows ma zapnute animacie (inak staticky oblak s kvapkami).
+    fn wx_sync(&mut self) {
+        let want = !self.reduced_motion
+            && !self.hidden
+            && self.item_visible("weather")
+            && self.layouts.keys().any(|m| !self.hidden_bars.contains(m))
+            && self
+                .weather_now()
+                .is_some_and(|w| weather::precip(w.code).is_some());
+        match (want, self.wx_anim.is_some()) {
+            (true, false) => {
+                self.wx_anim = Some((Instant::now(), 0));
+                schedule_timer(T_WEATHER, transom_render::scene::PRECIP_FRAME_MS);
+            }
+            (false, true) => {
+                self.wx_anim = None;
+                transom_platform::appbar::cancel_timer(T_WEATHER);
+                self.wx_repaint();
+            }
+            _ => {}
+        }
+    }
+
+    /// Snimka animacie pocasia: prekresli sa len polozka pocasia.
+    fn wx_frame(&mut self) {
+        let Some((t0, last)) = self.wx_anim else {
+            return;
+        };
+        let ms = t0.elapsed().as_millis() as u64;
+        let frame_ms = transom_render::scene::PRECIP_FRAME_MS as u64;
+        let f = ((ms / frame_ms) % transom_render::scene::PRECIP_FRAMES as u64) as u8;
+        if f != last {
+            self.wx_anim = Some((t0, f));
+            self.wx_repaint();
+        }
+        // dalsia snimka na hranici casu (bez kumulovania oneskorenia)
+        let next = frame_ms - ms % frame_ms;
+        schedule_timer(T_WEATHER, next.max(10) as u32);
+    }
+
+    fn wx_repaint(&self) {
+        for (m, l) in &self.layouts {
+            if self.hidden_bars.contains(m) {
+                continue;
+            }
+            for p in l.iter().filter(|p| p.item == ItemId::Weather) {
+                transom_platform::invalidate_span(m, p.x, p.w);
+            }
+        }
+    }
+
     fn marquee_tick(&mut self) {
         let policy = self.marquee_policy();
         let (speed, rtl) = self.marquee_motion();
@@ -971,33 +1077,111 @@ impl App {
     fn bar_lead_color(&self) -> (u8, u8, u8) {
         let alpha = self.config.appearance.effective(&self.config.oled).1;
         let bar = self.bar_theme().background;
-        // farba lisaty len ak je na nej text panela (tema aplikacie) citatelny
-        let c = if alpha >= 128 && transom_render::audit::ratio(bar, self.theme.foreground) >= 4.5 {
+        // farba lisaty len ak je na nej text panela citatelny
+        let th = self.panel_theme();
+        let c = if alpha >= 128 && transom_render::audit::ratio(bar, th.foreground) >= 4.5 {
             bar
         } else {
-            self.theme.background
+            th.background
         };
         (c.r, c.g, c.b)
     }
 
-    /// Nadych skla z vlastnej farby listy (ak je nastavena): odtien listy, stmaveny / zosvetleny len natolko, aby
-    /// najslabsi text panela ostal citatelny nad lubovolnou strankou pod sklom. Bez vlastnej farby `None` (nadych temy).
-    fn glass_tint(&self, alpha: u8) -> Option<(u8, u8, u8)> {
+    /// Sklo s vlastnou farbou listy (ak je nastavena): jej odtien, vzhlad (tmave / svetle sklo) podla farby a krytie
+    /// zvysene natolko, aby tlmeny text ostal citatelny nad lubovolnou strankou pod sklom. Bez vlastnej farby `None`.
+    fn glass_tint(&self, alpha: u8) -> Option<transom_platform::glass::Tinted> {
         let c = self.config.appearance.color()?;
-        let m = self.theme.muted;
-        Some(transom_platform::glass::readable_tint(
-            c,
-            (m.r, m.g, m.b),
-            self.theme.dark,
-            alpha,
-        ))
+        Some(transom_platform::glass::tint_for(c, alpha))
+    }
+
+    /// Nepriehladnost skla panelov podla nastavenia (Pozadie -> Priehladnost panelov).
+    fn panel_glass_alpha(&self) -> u8 {
+        (self.config.appearance.glass_opacity.clamp(40, 100) * 255 / 100) as u8
+    }
+
+    /// Tema panelov: tema aplikacie; na skle s vlastnou farbou podla farby skla (svetla farba = svetly vzhlad s tmavym
+    /// textom aj v tmavej teme, tmava naopak).
+    fn panel_theme(&self) -> Theme {
+        match self
+            .glass_on(false)
+            .then(|| self.glass_tint(self.panel_glass_alpha()))
+            .flatten()
+        {
+            Some(t) if t.dark != self.theme.dark => flip_theme(t.dark),
+            _ => self.theme,
+        }
+    }
+
+    /// Text listy sa prisposobuje tomu, co je pod nou (len pri automatickom texte a lište prevazne priehladnej, bez skla).
+    fn under_adapts(&self) -> bool {
+        let (_, alpha) = self.config.appearance.effective(&self.config.oled);
+        alpha < 128
+            && !self.glass_on(true)
+            && matches!(
+                self.config.appearance.text(),
+                transom_config::TextChoice::Auto
+            )
+    }
+
+    /// Odmeria farbu pod priehladnou listou na kazdom monitore; pri zmene prekresli.
+    fn sample_under(&mut self) {
+        self.under_at = Some(Instant::now());
+        if !self.under_adapts() {
+            if !self.under.is_empty() {
+                self.under.clear();
+                invalidate_all();
+            }
+            return;
+        }
+        let mut changed = false;
+        let ids: Vec<String> = self.layouts.keys().cloned().collect();
+        for m in ids {
+            if self.hidden_bars.contains(&m) {
+                continue;
+            }
+            let Some(c) = transom_platform::appbar::bar_backdrop(&m) else {
+                continue;
+            };
+            // male rozdiely (sum, posun textu) neprekresluju
+            let far = self.under.get(&m).is_none_or(|o| {
+                (o.0 as i32 - c.0 as i32).abs()
+                    + (o.1 as i32 - c.1 as i32).abs()
+                    + (o.2 as i32 - c.2 as i32).abs()
+                    > 24
+            });
+            if far {
+                log(&format!(
+                    "pod listou: jas {}",
+                    (c.0 as u32 + c.1 as u32 + c.2 as u32) / 3
+                ));
+                self.under.insert(m, c);
+                changed = true;
+            }
+        }
+        if changed {
+            invalidate_all();
+        }
     }
 
     fn bar_theme(&self) -> Theme {
+        self.bar_theme_on(None)
+    }
+
+    /// Tema listy monitora `monitor` (pri priehladnej liste s textom podla farby pod nou).
+    fn bar_theme_on(&self, monitor: Option<&str>) -> Theme {
         let (bg, alpha) = self.config.appearance.effective(&self.config.oled);
         // sklo pod listou ma nadych temy (nie vlastnu farbu): text sa riadi temou, inak by svetla vlastna farba dala
         // tmavy text na ciernom skle
         let bg = if self.glass_on(true) { None } else { bg };
+        // sklenena lista s vlastnou farbou: text podla farby skla (svetle sklo = tmavy text)
+        let base = match self
+            .glass_on(true)
+            .then(|| self.glass_tint(transom_platform::glass::DARK_TINT_ALPHA))
+            .flatten()
+        {
+            Some(t) if t.dark != self.theme.dark => flip_theme(t.dark),
+            _ => self.theme,
+        };
         let text = match self.config.appearance.text() {
             transom_config::TextChoice::Auto => transom_render::BarText::Auto,
             transom_config::TextChoice::Light => transom_render::BarText::Light,
@@ -1006,10 +1190,18 @@ impl App {
                 transom_render::BarText::Custom(Color::rgb(r, g, b))
             }
         };
-        let th = self
-            .theme
+        let mut th = base
             .for_bar(bg.map(|(r, g, b)| Color::rgb(r, g, b)), alpha)
             .with_text(text);
+        // priehladna lista: text citatelny na tom, co je pod nou (svetla plocha = tmavy text); pozadie ostava
+        if let Some(&(r, g, b)) = monitor
+            .filter(|_| self.under_adapts())
+            .and_then(|m| self.under.get(m))
+        {
+            let keep = th.background;
+            th = th.on_background(Color::rgb(r, g, b));
+            th.background = keep;
+        }
         if self.config.oled.dim_text() {
             th.dimmed()
         } else {
@@ -1081,7 +1273,7 @@ impl App {
             .as_ref()
             .filter(|_| self.item_visible("sysmon"))
             .map(|(m, _)| extras::sys_view(&m.last(), &self.config.sysmon));
-        let weather_snap = self.weather.as_ref().and_then(|w| w.snapshot());
+        let weather_snap = self.weather_now();
         let mut items = view::build_items(&view::View {
             clock: &self.clock,
             battery: self.sim_battery.or(self.battery),
@@ -1104,6 +1296,7 @@ impl App {
             window: self.window_info.as_ref(),
             desktops: self.desktop_info,
             weather: weather_snap.as_ref(),
+            weather_phase: self.wx_anim.map_or(0, |(_, f)| f),
             update: self.update_icon(),
         });
         // stred listy: ostrov (logo transom, pocas aktivity hudba / AI / oznamenie)
@@ -1234,52 +1427,6 @@ impl App {
         }
     }
 
-    /// Kapatko: dalsie kliknutie na obrazovke precita farbu (nepostupi do aplikacie pod mysou).
-    fn pick_start(&mut self) -> snd::Outcome {
-        if !transom_platform::picker::start() {
-            self.show_notice(t("pick.failed"));
-            return snd::Outcome::Failed;
-        }
-        log("kapatko: spustene");
-        self.show_info(
-            info_notch::Info {
-                icon: transom_render::scene::glyph_char(transom_core::item::Glyph::Picker),
-                title: t("pick.name"),
-                sub: t("pick.hint"),
-                value: None,
-                muted: false,
-                swatch: None,
-            },
-            20_000,
-        );
-        snd::Outcome::Done
-    }
-
-    /// Vysledok kapatka: HEX do schranky a vzorka vo vybezku.
-    fn pick_done(&mut self, c: Option<(u8, u8, u8)>) {
-        let Some(c) = c else {
-            log("kapatko: zrusene");
-            self.info_end();
-            return;
-        };
-        let hex = transom_platform::picker::hex(c);
-        log("kapatko: farba skopirovana");
-        self.tools_send(transom_tools::service::Cmd::Put(
-            transom_tools::clipboard::Payload::Text(hex.clone()),
-        ));
-        self.show_info(
-            info_notch::Info {
-                icon: ' ',
-                title: hex,
-                sub: format!("RGB {}, {}, {} · {}", c.0, c.1, c.2, t("pick.copied")),
-                value: None,
-                muted: false,
-                swatch: Some(c),
-            },
-            4000,
-        );
-    }
-
     /// Nova snimka v schranke: ulozit ako PNG do priecinka nastrojov a pridat do odlozenych suborov (odkaz).
     fn snip_poll(&mut self) {
         let Some((seq, t0)) = self.snip else {
@@ -1317,28 +1464,6 @@ impl App {
             sub: t("island.stash_sub"),
             act: Some(island::NoticeAct::Stash),
         });
-    }
-
-    /// Kratke oznamenie vo vybezku na `ms` (nie pocas upravy lisaty ani pri otvorenom paneli).
-    fn show_info(&mut self, info: info_notch::Info, ms: u32) {
-        if self.bar_edit.is_some() || popup::popover_open().is_some() {
-            return;
-        }
-        let h = info_notch::height_lp(&info);
-        self.notch_info = Some(info);
-        self.notch_view = NotchView::Info;
-        transom_platform::dragdrop::notch_browse_at(None, Some(h));
-        transom_platform::dragdrop::invalidate_notch();
-        schedule_timer(T_INFO, ms);
-    }
-
-    /// Koniec oznamenia: vybezok sa zbali (ak nad nim nie je mys).
-    fn info_end(&mut self) {
-        if self.notch_view == NotchView::Info {
-            self.notch_info = None;
-            self.notch_view = NotchView::Stash;
-            transom_platform::dragdrop::notch_browse(None);
-        }
     }
 
     /// Koliesko nad listou: nad Zvukom hlasitost, nad Jasom jas monitorov (hodnotu ukazu ich panely a polozky).
@@ -1414,15 +1539,11 @@ impl App {
             return;
         };
         // bezi kratke oznamenie (hlasitost, casovac, udalost): ma prednost pred prezeranim
-        if self.bar_edit.is_some()
-            || popup::popover_open().is_some()
-            || self.notch_view == NotchView::Info
-        {
+        if self.bar_edit.is_some() || popup::popover_open().is_some() {
             return;
         }
         match view {
             NotchView::Island => {}
-            NotchView::Info => {}
             NotchView::Weather => {
                 if self.weather.as_ref().and_then(|w| w.snapshot()).is_none() {
                     return;
@@ -1516,10 +1637,7 @@ impl App {
         } else {
             (self.notch_view, y, kind)
         };
-        if matches!(
-            view,
-            NotchView::Info | NotchView::Weather | NotchView::Island
-        ) {
+        if matches!(view, NotchView::Weather | NotchView::Island) {
             return;
         }
         if view == NotchView::Clip {
@@ -2747,6 +2865,11 @@ impl App {
 
     fn tick(&mut self, why: &str) {
         self.event_check();
+        self.wx_sync();
+        // pozadie plochy sa moze menit aj samo (prezentacia): najviac raz za 20 s
+        if self.under_at.is_none_or(|t| t.elapsed().as_secs() >= 20) {
+            self.sample_under();
+        }
         self.watch_tick();
         let secs = self.config.clock.seconds;
         if secs && why == "wake" {
@@ -2836,7 +2959,6 @@ impl App {
                 return snd::Outcome::Done;
             }
             Action::SnipToStash => return self.snip_start(),
-            Action::ColorPick => return self.pick_start(),
             Action::FocusPanel => {
                 // Windows nema podporovane API na prepnutie Nerusit / Sustredenia: otvori ich vlastny panel
                 return match transom_platform::input::send_shortcut(
@@ -2875,6 +2997,7 @@ impl App {
             | Action::PrivacyPanel
             | Action::WeatherOpen
             | Action::UpdatePanel
+            | Action::ColorPick
             | Action::Launcher => {
                 let Some((monitor_id, x)) = at
                     .or_else(|| self.popover_monitor.clone().map(|m| (m, 0)))
@@ -2911,6 +3034,9 @@ impl App {
                 } else if action == Action::AudioPanel {
                     self.audio_open();
                     (POP_AUDIO, audio_pop::AUDIO_W_LP, audio_pop::AUDIO_H_LP)
+                } else if action == Action::ColorPick {
+                    self.colors_open(Some((monitor_id.clone(), x)));
+                    (POP_COLORS, extras::KIT_W_LP, colors_pop::COLORS_H_LP)
                 } else if let Some(k) = kit_kind_for(action) {
                     self.kit_open(k);
                     let h = match self.update_view().filter(|_| k == POP_UPDATE) {
@@ -3249,6 +3375,25 @@ impl App {
             self.pressed = new_pressed;
             invalidate_all();
         }
+        // klik inde na liste zavrie otvoreny panel (lista okno neaktivuje, takze by ostal otvoreny) aj menu ostrova;
+        // polozka, ktora panel otvara, ho prepne sama (zavrie ten isty, nahradi iny)
+        if kind == PointerKind::Click {
+            let toggles = fire && action.is_some_and(opens_panel);
+            if !toggles && popup::popover_open().is_some() {
+                log("klik inde na liste: panel zatvoreny");
+                popup::request(popup::Request::ClosePopover);
+            }
+            // len menu ostrova (otvorene klikom); vybezky otvorene prejdenim mysou (hudba, pocasie) sa riadia mysou
+            let island = fire && action == Some(Action::Island);
+            if !island
+                && self.notch_view == NotchView::Island
+                && transom_platform::dragdrop::notch_browsing()
+            {
+                log("klik inde na liste: menu ostrova zbalene");
+                transom_platform::dragdrop::notch_collapse();
+                self.island_sync();
+            }
+        }
         if fire && action == Some(Action::ShelfFile) {
             if let Some((_, part)) = hit {
                 let out = self.shelf_click(part);
@@ -3344,6 +3489,7 @@ impl App {
         ));
         popup::request(Request::SetHidden(hidden));
         self.sync_tray();
+        self.wx_sync();
     }
 
     /// Volba "Zostava / Spotrebovane" v paneli AI: zapise sa do konfiguracie (znova nacitanej z disku, meni sa **len**
@@ -4165,7 +4311,6 @@ enum NotchView {
     Island,
     Stash,
     Media,
-    Info,
     Clip,
     Weather,
 }
@@ -4182,6 +4327,15 @@ fn notch_view_for(item: ItemId) -> Option<NotchView> {
 }
 
 /// Cast panela Nastroje, na ktorej sa otvori po akcii (`ToolsPanel` = Polica, ako doteraz).
+/// Zakladna tmava / svetla tema (vzhlad podla farby skla, nezavisle od temy Windows).
+fn flip_theme(dark: bool) -> Theme {
+    if dark {
+        Theme::dark()
+    } else {
+        Theme::light()
+    }
+}
+
 fn tools_section(a: Action) -> Option<tools_pop::Section> {
     use tools_pop::Section;
     Some(match a {
@@ -4201,7 +4355,7 @@ impl BarHandler for App {
         // sklo: pozadie aj okraj v prechode na cierne / biele pozadie (alfa sa odvodi z rozdielu); tema sa vrati
         let saved = self.theme;
         if let Some((r, g, b)) = ctx.backdrop {
-            self.theme = self.theme.glass_pass(Color::rgb(r, g, b));
+            self.theme = self.panel_theme().glass_pass(Color::rgb(r, g, b));
         }
         match ctx.kind {
             POP_CALENDAR => {
@@ -4250,12 +4404,6 @@ impl BarHandler for App {
                     let rows = self.tools_snap.clipboard.clone();
                     self.clip_notch.paint(&mut p, &self.theme, &rows);
                 } else if transom_platform::dragdrop::notch_browsing()
-                    && self.notch_view == NotchView::Info
-                {
-                    if let Some(i) = self.notch_info.clone() {
-                        info_notch::paint(&mut p, &self.theme, &i);
-                    }
-                } else if transom_platform::dragdrop::notch_browsing()
                     && self.notch_view == NotchView::Media
                 {
                     if let Some(info) = self.chosen_session().cloned() {
@@ -4301,23 +4449,24 @@ impl BarHandler for App {
         // vsetko pod listou (panely, vybezok) je k nej pripojene; menu na prave tlacidlo ostava samostatne
         let attached = kind != POP_MENU;
         self.glass_on(false).then(|| {
-            let bg = self.theme.background;
+            let th = self.panel_theme();
+            let bg = th.background;
             let mut st = GlassStyle::for_theme(
                 (bg.r, bg.g, bg.b),
-                self.theme.dark,
+                th.dark,
                 if attached { Rim::Attached } else { Rim::All },
             );
-            // nepriehladnost skla podla nastavenia (Pozadie -> Priehladnost panelov)
-            st.tint_alpha = (self.config.appearance.glass_opacity.clamp(40, 100) * 255 / 100) as u8;
-            // vlastna farba listy: sklo ma jej odtien (stmaveny / zosvetleny len natolko, aby text ostal citatelny)
+            st.tint_alpha = self.panel_glass_alpha();
+            // vlastna farba listy: sklo ma jej odtien (krytie zvysene / farba upravena len natolko, aby text ostal citatelny)
             if let Some(t) = self.glass_tint(st.tint_alpha) {
-                st.tint = t;
+                st.tint = t.tint;
+                st.tint_alpha = t.alpha;
             }
             // pripojene vyrastaju z listy: hore zacinaju jej plnou farbou a plynulo prejdu do skla (sklenena lista
             // uz je tym istym sklom)
             if attached && !self.glass_on(true) {
                 // farbu spresni okno podla skutocnej farby listy na obrazovke; dlhy plynuly nabeh = "vysunute z listy"
-                let fg = self.theme.foreground;
+                let fg = th.foreground;
                 st.lead = Some(Lead {
                     color: self.bar_lead_color(),
                     alpha: 255,
@@ -4353,15 +4502,18 @@ impl BarHandler for App {
             // sklo berie nadych z temy, nie z vlastnej farby listy (napr. "uplne priehladna biela" by dala biele sklo
             // pod svetlym textom)
             glass: self.glass_on(true).then(|| {
-                let t = self.theme.background;
+                let tinted = self.glass_tint(transom_platform::glass::DARK_TINT_ALPHA);
+                let dark = tinted.map_or(self.theme.dark, |t| t.dark);
+                let t = flip_theme(dark).background;
                 let mut st = transom_platform::glass::GlassStyle::for_theme(
                     (t.r, t.g, t.b),
-                    self.theme.dark,
+                    dark,
                     transom_platform::glass::Rim::Bottom,
                 );
                 // vlastna farba listy: sklenena lista ma jej odtien (text ostava citatelny)
-                if let Some(t) = self.glass_tint(st.tint_alpha) {
-                    st.tint = t;
+                if let Some(t) = tinted {
+                    st.tint = t.tint;
+                    st.tint_alpha = t.alpha;
                 }
                 st
             }),
@@ -4410,7 +4562,7 @@ impl BarHandler for App {
             },
         };
         // vlastna farba pozadia; pri priehladnom rezime sa kresli na cierne/biele pozadie (pozri `layered`)
-        let mut theme = self.bar_theme();
+        let mut theme = self.bar_theme_on(Some(&ctx.monitor_id));
         if let Some((r, g, b)) = ctx.backdrop {
             theme.background = Color::rgb(r, g, b);
         }
@@ -4537,7 +4689,16 @@ impl BarHandler for App {
                     .join(" ")
             ));
         }
+        // polozka pocasia sa prave objavila (prve kreslenie, zmena rozlozenia): animacia dazda / snehu sa moze spustit hned
+        let had_weather = self
+            .layouts
+            .get(&ctx.monitor_id)
+            .is_some_and(|l| l.iter().any(|p| p.item == ItemId::Weather));
+        let has_weather = placed.iter().any(|p| p.item == ItemId::Weather);
         self.layouts.insert(ctx.monitor_id.clone(), placed);
+        if has_weather && !had_weather && self.wx_anim.is_none() {
+            self.wx_sync();
+        }
         self.bar_widths
             .insert(ctx.monitor_id.clone(), ctx.client.width());
         self.painted_shelf = self
@@ -4593,6 +4754,7 @@ impl BarHandler for App {
         self.ensure_usage();
         if !self.tray_synced && notifier().is_some() {
             // `--start-hidden` (test): zacat so skrytou listou, rovnako ako po "Skryt listu" (ikona sa vynuti)
+            schedule_timer(T_UNDER, 700);
             if flag("--start-hidden") {
                 self.hidden = false;
                 self.set_hidden(true);
@@ -4611,6 +4773,7 @@ impl BarHandler for App {
             | BarEvent::Timer(T_ISLAND)
             | BarEvent::Timer(T_GLIDE)
             | BarEvent::Timer(T_EQ)
+            | BarEvent::Timer(T_WEATHER)
             | BarEvent::Timer(T_MEDIA)
             | BarEvent::Notify(N_EQ) => {}
             BarEvent::FilesDropped(p) => log(&format!("FilesDropped(n={})", p.len())),
@@ -4661,10 +4824,12 @@ impl BarHandler for App {
             BarEvent::Notify(N_FRAME) => self.marquee_tick(),
             BarEvent::Timer(T_VERIFY) => self.verify(),
             BarEvent::Timer(T_STASH) => self.stash_open(),
-            BarEvent::Timer(T_INFO) => self.info_end(),
             BarEvent::Timer(T_ISLAND) => self.island_tick(),
             BarEvent::Timer(T_GLIDE) => self.glide_tick(),
             BarEvent::Timer(T_EQ) => self.eq_frame(),
+            BarEvent::Timer(T_WEATHER) => self.wx_frame(),
+            BarEvent::Timer(T_UNDER) => self.sample_under(),
+            BarEvent::WallpaperChanged => schedule_timer(T_UNDER, 900),
             BarEvent::Timer(T_MEDIA) => self.media_tick(),
             BarEvent::Notify(N_EQ) => self.eq_wake(),
             BarEvent::Notify(N_SHOTS) => self.shots_changed(),
@@ -4719,6 +4884,7 @@ impl BarHandler for App {
                 log(&format!("animacie v systeme: {}", !self.reduced_motion));
                 invalidate_all();
                 self.kick_ticker();
+                self.wx_sync();
             }
             BarEvent::Fullscreen { monitor_id, opened } => {
                 if *opened {
@@ -4726,7 +4892,9 @@ impl BarHandler for App {
                 } else {
                     self.hidden_bars.remove(monitor_id);
                     self.kick_ticker();
+                    schedule_timer(T_UNDER, 600);
                 }
+                self.wx_sync();
                 self.sync_hotkey();
             }
             BarEvent::Timer(T_ACTIVATE) => {
@@ -4756,6 +4924,8 @@ impl BarHandler for App {
             BarEvent::Broadcast(i) if *i == self.bc_config => {
                 self.reload_config();
                 self.sync_weather();
+                self.wx_sync();
+                schedule_timer(T_UNDER, 300);
                 self.sync_island_watches();
                 self.sync_keys();
                 self.sync_bright(false);
@@ -4951,6 +5121,7 @@ impl BarHandler for App {
                 }
             }
             BarEvent::Notify(N_WEATHER) => {
+                self.wx_sync();
                 invalidate_all();
                 if self.notch_view == NotchView::Weather {
                     transom_platform::dragdrop::invalidate_notch();
