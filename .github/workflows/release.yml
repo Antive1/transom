@@ -176,5 +176,5 @@ jobs:
             gh release upload "$TAG" out/* --clobber
             gh release edit "$TAG" --notes-file release-body.md
           else
-            gh release create "$TAG" out/* --prerelease --title "transom $VERSION" --notes-file release-body.md
+            gh release create "$TAG" out/* --title "transom $VERSION" --notes-file release-body.md
           fi
