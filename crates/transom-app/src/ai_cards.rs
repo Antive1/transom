@@ -24,6 +24,8 @@ pub struct Row {
 pub struct Card {
     pub provider: Provider,
     pub plan: String,
+    /// E-mail prihlaseneho uctu (z lokalnych suborov nastroja), ak je znamy.
+    pub account: String,
     pub rows: Vec<Row>,
     pub context: Option<ContextSnapshot>,
     /// Kratka veta, preco poskytovatel nema ziadne okno a ako to opravit (len ak nema ziadne okno).
@@ -62,6 +64,7 @@ pub fn build(
                 None
             };
             Card {
+                account: String::new(),
                 provider: prov,
                 plan,
                 rows,
@@ -389,16 +392,27 @@ fn draw_card(
     let mut y = y0 + pad;
     // hlavicka: poskytovatel vlavo, plan vpravo (len ak je znamy)
     let hst = style(13.0, true, th.foreground, HAlign::Left);
-    p.draw_text(
-        crate::ai::provider_short(card.provider),
-        Rect::new(ix, y, iw, px(20.0)),
-        &hst,
-    );
-    if !card.plan.is_empty() {
-        chip_right(p, th, &card.plan, ix + iw, y + px(2.0));
+    let name = crate::ai::provider_short(card.provider);
+    p.draw_text(name, Rect::new(ix, y, iw, px(20.0)), &hst);
+    let chip_w = if card.plan.is_empty() {
+        0
+    } else {
+        chip_right(p, th, &card.plan, ix + iw, y + px(2.0)) + px(8.0)
+    };
+    // ucet (pri viacerych uctoch je jasne, ku ktoremu patria limity): v hlavicke medzi nazvom a planom, skrateny
+    if !card.account.is_empty() {
+        let ast = style(11.0, false, th.muted, HAlign::Left);
+        let ax = ix + p.measure_text(name, &hst).w + px(8.0);
+        let aw = ix + iw - chip_w - ax;
+        if aw > px(40.0) {
+            let text = crate::audio_pop::fit(p, &card.account, &ast, aw);
+            p.draw_text(&text, Rect::new(ax, y + px(1.0), aw, px(20.0)), &ast);
+        }
     }
     y += px(26.0);
-    if card.rows.is_empty() {
+    // Grok: limity kreditu su len na serveri - kompaktna karta (ucet a plan); tokeny su v historii
+    let local_only = card.provider == Provider::Grok;
+    if card.rows.is_empty() && !local_only {
         // nedostupne: nikdy "0 %"; kratky nadpis + jedna veta, ako to opravit (bez tajomstiev a ciest)
         p.draw_text(
             &t("ai.unavail.title"),
@@ -475,7 +489,7 @@ mod tests {
             recorded_at: at,
             source: match p {
                 Provider::ClaudeCode => SnapshotSource::ClaudeStatusline,
-                Provider::Codex => SnapshotSource::CodexSession,
+                Provider::Codex | Provider::Grok => SnapshotSource::CodexSession,
             },
         }
     }

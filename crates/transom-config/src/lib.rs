@@ -1631,6 +1631,8 @@ pub struct Usage {
     pub claude_statusline: bool,
     /// Lokalne relacie Codex (`~/.codex/sessions`, nezdokumentovany format).
     pub codex_local: bool,
+    /// Lokalne relacie Grok CLI (`~/.grok/sessions`, nezdokumentovany format).
+    pub grok_local: bool,
     /// Automaticka obnova v minutach; 0 = len na poziadanie, inak najmenej [`MIN_REFRESH_MINUTES`]
     /// (pozri [`Usage::refresh_interval_minutes`]).
     #[serde(deserialize_with = "de_refresh")]
@@ -1773,6 +1775,7 @@ impl Default for Usage {
             claude_local: false,
             claude_statusline: false,
             codex_local: false,
+            grok_local: false,
             refresh_minutes: MIN_REFRESH_MINUTES,
             bar_provider: "auto".into(),
             ring_mode: "used".into(),
@@ -1784,7 +1787,7 @@ impl Default for Usage {
 
 impl Usage {
     pub fn any_enabled(&self) -> bool {
-        self.claude_local || self.claude_statusline || self.codex_local
+        self.claude_local || self.claude_statusline || self.codex_local || self.grok_local
     }
 
     /// Skutocny automaticky interval: `None` = len na poziadanie, inak `MIN_REFRESH_MINUTES..=MAX_REFRESH_MINUTES`

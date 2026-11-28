@@ -101,6 +101,8 @@ pub fn stale_after_s(u: &transom_config::Usage) -> i64 {
 pub struct AiState {
     /// Plynule posuvanie (snimka: `glide_step`).
     pub glide: transom_render::design::Glide,
+    /// Posuvnik spodnej casti, ktory sa da chytit a tahat mysou.
+    pub sbar: transom_render::design::ScrollBar,
 
     pub data: Option<Collected>,
     pub busy: bool,
@@ -160,9 +162,16 @@ pub fn sources(u: &transom_config::Usage) -> Sources {
     let codex = std::env::var_os("CODEX_HOME")
         .map(Into::into)
         .unwrap_or(home.join(".codex"));
+    let dir = |var: &str, dot: &str| -> std::path::PathBuf {
+        std::env::var_os(var)
+            .filter(|v| !v.is_empty())
+            .map(Into::into)
+            .unwrap_or(home.join(dot))
+    };
     Sources {
         claude_dir: u.claude_local.then_some(claude),
         codex_dir: u.codex_local.then_some(codex),
+        grok_dir: u.grok_local.then(|| dir("GROK_HOME", ".grok")),
         statusline_file: u.claude_statusline.then(cache::statusline_path),
         // archiv dennych suctov: zapisuje sa len ked ho pouzivatel zapol (a nepozastavil); existujuci subor sa cita vzdy
         archive: {
@@ -180,6 +189,7 @@ pub fn provider_short(p: Provider) -> &'static str {
     match p {
         Provider::ClaudeCode => "Claude",
         Provider::Codex => "Codex",
+        Provider::Grok => "Grok",
     }
 }
 
@@ -199,6 +209,7 @@ fn source_name(k: SourceKind) -> String {
         SourceKind::ClaudeLocal => "src.claude_local",
         SourceKind::ClaudeStatusline => "src.claude_statusline",
         SourceKind::CodexLocal => "src.codex_local",
+        SourceKind::GrokLocal => "src.grok_local",
     })
 }
 
@@ -281,6 +292,7 @@ pub fn enabled_providers(u: &transom_config::Usage) -> Vec<Provider> {
         .filter(|p| match p {
             Provider::ClaudeCode => u.claude_local || u.claude_statusline,
             Provider::Codex => u.codex_local,
+            Provider::Grok => u.grok_local,
         })
         .collect()
 }
@@ -348,6 +360,8 @@ pub fn provider_hint(
             }
         }
         Provider::Codex => Some(t("ai.hint.codex")),
+        // limity planu su len na serveri (karta je kompaktna, bez vysvetlenia)
+        Provider::Grok => None,
     }
 }
 
@@ -486,6 +500,7 @@ impl AiState {
     pub fn new() -> Self {
         AiState {
             glide: Default::default(),
+            sbar: Default::default(),
             data: None,
             busy: false,
             tab: Period::Today,
@@ -921,8 +936,12 @@ impl AiState {
             y += ai_month::mode_toggle(p, th, mode, self.hover, pad, y, &mut hits) + px(8);
             // 1. aktualne limity (karta na poskytovatela) su na zaciatku posuvneho obsahu: pri bezne velkosti sa vidia hned
             let hint_for = |pr: Provider| provider_hint(pr, u, Some(d));
-            let cards =
+            let mut cards =
                 ai_cards::build(&d.plans, &d.context, &enabled_providers(u), now, &hint_for);
+            // ucet (e-mail) z lokalnych suborov nastroja: pri viacerych uctoch je jasne, ku ktoremu patria limity
+            for c in &mut cards {
+                c.account = transom_usage::account::email_for(c.provider).unwrap_or_default();
+            }
             let rows = summarize(&d.days, today, self.tab);
             // 2. posuvne okno (karty limitov, potom historia / mesacny pohlad / podrobnosti) so zretelnym posuvnikom
             let vp_top = y;
@@ -1013,10 +1032,14 @@ impl AiState {
                 let tw = px(5);
                 let tx = sz.w - px(7);
                 p.fill_round_rect(Rect::new(tx, vp.y, tw, vp.h), tw / 2, th.pressed);
-                let th_h = (vp.h * vp.h / (vp.h + self.max_scroll)).max(px(28));
-                let ty = vp.y + (vp.h - th_h) * self.scroll / self.max_scroll;
-                p.fill_round_rect(Rect::new(tx, ty, tw, th_h), tw / 2, th.muted);
             }
+            self.sbar.paint(
+                p,
+                th,
+                Rect::new(0, vp.y, sz.w, vp.h),
+                self.scroll,
+                self.max_scroll,
+            );
         } else {
             let msg = if self.busy {
                 t("ai.loading")
@@ -2334,8 +2357,12 @@ mod tests {
                     .into_iter()
                     .find(|(n, _)| *n == "worst-stale-errors")
                     .unwrap();
-                let cards =
+                let mut cards =
                     ai_cards::build(&worst.plans, &worst.context, &Provider::ALL, NOW, &|_| None);
+                // e-mail uctu je v hlavicke karty: vyska sa nesmie zmenit ani s dlhou adresou
+                for c in &mut cards {
+                    c.account = "a.very.long.account.name@example-company.com".into();
+                }
                 let surf = Surface::new(w, h);
                 let mut gp = GdiPainter::new(surf.dc, Size { w, h }, dpi);
                 let cw = w - 2 * (14.0 * s).round() as i32;

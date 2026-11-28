@@ -307,6 +307,27 @@ impl LayeredBuf {
         crate::glass::compose(b, w, out, self.w, self.h, a, st, content);
     }
 
+    /// Vystup mimo obdlznika `a` je uplne priehladny (pocas vysuvania: este neodkryta cast okna). Okno sa tak
+    /// neorezava oblastou - pri skle by DWM novo odkryty pas pri kazdom zvacseni oblasti na snimku ukazal bielo.
+    pub fn clear_outside(&mut self, a: Area) {
+        // SAFETY: `out` je samostatny DIB s `len` pixelmi; ziadna ina vypozicka jeho pamate nezije.
+        let out = unsafe { std::slice::from_raw_parts_mut(self.out.bits, self.out.len) };
+        let w = self.w.max(0) as usize;
+        for (y, row) in out.chunks_mut(w.max(1)).enumerate() {
+            let y = y as i32;
+            if y < a.y0 || y >= a.y1 {
+                row.fill(0);
+            } else {
+                let (x0, x1) = (
+                    a.x0.clamp(0, self.w) as usize,
+                    a.x1.clamp(0, self.w) as usize,
+                );
+                row[..x0].fill(0);
+                row[x1.max(x0)..].fill(0);
+            }
+        }
+    }
+
     /// Skopiruje oblast `a` vystupu (premultiplied BGRA) do DC okna so sklom (`BitBlt`, alfa sa zachova).
     pub fn blit(&self, hdc: HDC, a: Area) {
         // SAFETY: BitBlt z nasho DIB do platneho DC okna v ramci velkosti DIB.
@@ -366,6 +387,28 @@ mod tests {
             g as f32 + k[1] as f32 * (1.0 - a),
             b as f32 + k[2] as f32 * (1.0 - a),
         ]
+    }
+
+    #[test]
+    fn clear_outside_leaves_only_the_revealed_rectangle() {
+        let mut b = LayeredBuf::new(6, 5).expect("buf");
+        // SAFETY: vystupny DIB s w*h pixelmi; testovacia vypozicka.
+        let out = unsafe { std::slice::from_raw_parts_mut(b.out.bits, b.out.len) };
+        out.fill(0xFF11_2233);
+        b.clear_outside(Area {
+            x0: 1,
+            y0: 0,
+            x1: 4,
+            y1: 3,
+        });
+        // SAFETY: ako vyssie.
+        let out = unsafe { std::slice::from_raw_parts(b.out.bits, b.out.len) };
+        for y in 0..5 {
+            for x in 0..6 {
+                let inside = (1..4).contains(&x) && y < 3;
+                assert_eq!(out[y * 6 + x] != 0, inside, "{x},{y}");
+            }
+        }
     }
 
     #[test]

@@ -22,7 +22,7 @@ pub(crate) fn paint(ui: &mut Ui, dpi: u32) -> (i32, i32) {
     (cw, ch)
 }
 
-const PAGES: [Page; 21] = [
+const PAGES: [Page; 20] = [
     Page::Layout,
     Page::Displays,
     Page::Media,
@@ -30,7 +30,6 @@ const PAGES: [Page; 21] = [
     Page::Clock,
     Page::Ai,
     Page::Sound,
-    Page::Audio,
     Page::Peripherals,
     Page::Tools,
     Page::Extras,

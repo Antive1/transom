@@ -1,4 +1,4 @@
-//! Panel Zvuk a rychle akcie: stavy zariadeni, hlasitost a stlmenie, medze, klavesnica, mys, pristupnost a audit vzhladu
+//! Panel Zvuk: vyber vystupu, stavy zariadeni, hlasitost a stlmenie, medze, klavesnica, mys, pristupnost a audit vzhladu
 //! (offscreen, bez okna a bez zvukoveho zariadenia; snimky stavu su vyrobene rucne).
 use crate::audio_pop::{
     bar_glyph_and_name, step_percent, AudioCmd, AudioHit, AudioPanel, AUDIO_H_LP, AUDIO_W_LP,
@@ -13,6 +13,7 @@ use transom_render::{GdiPainter, Size, Theme};
 fn dev(name: &str, state: DeviceState, def: bool) -> Device {
     Device {
         name: name.into(),
+        key: key(name),
         state,
         is_default: def,
     }
@@ -44,21 +45,16 @@ fn normal() -> Snapshot {
     )
 }
 
-fn all_quick() -> Vec<String> {
-    transom_config::QUICK_ACTIONS
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+/// Kluc zariadenia v testoch (z nazvu; skutocny je odtlacok ID).
+fn key(name: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    name.hash(&mut h);
+    h.finish()
 }
 
 /// Nakresli panel (dvakrat: prve kreslenie pripravi hit-boxy) a vrati ho.
-fn paint(
-    panel: &mut AudioPanel,
-    s: &Snapshot,
-    quick: &[String],
-    dpi: u32,
-    h_mul: f32,
-) -> Vec<String> {
+fn paint(panel: &mut AudioPanel, s: &Snapshot, dpi: u32, h_mul: f32) -> Vec<String> {
     let sc = dpi as f32 / 96.0;
     let (w, h) = (
         (AUDIO_W_LP as f32 * sc).round() as i32,
@@ -71,7 +67,7 @@ fn paint(
     for _ in 0..2 {
         let mut gp = GdiPainter::new(surf.dc, Size { w, h }, dpi);
         let mut au = Audit::new(&mut gp, th.background);
-        panel.paint(&mut au, &th, &a, quick);
+        panel.paint(&mut au, &th, &a);
         au.finish();
         out = au.issues.iter().map(|i| format!("{i:?}")).collect();
     }
@@ -86,38 +82,32 @@ fn en() -> std::sync::MutexGuard<'static, ()> {
 fn the_panel_shows_default_volume_devices_and_labels_the_volume_as_system_output() {
     let _g = en();
     let mut p = AudioPanel::default();
-    let issues = paint(&mut p, &normal(), &all_quick(), 96, 2.0);
+    let issues = paint(&mut p, &normal(), 96, 2.0);
     assert!(issues.is_empty(), "{issues:?}");
     eprintln!("VYSKA obsahu normal = {} px pri 96 DPI", p.content_height());
     let (entries, extras, _, name) = p.a11y();
     assert_eq!(entries.len(), extras.len());
     assert_eq!(name, transom_i18n::t("audio.title"));
     let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
-    assert!(names
-        .iter()
-        .any(|n| n.contains("Speakers (Realtek)")
-            && n.contains(&transom_i18n::t("audio.default_label"))));
-    // hlasitost je jasne systemova a oddelena od zvukov rozhrania
-    assert!(names.contains(&"Windows system output volume"));
-    assert!(transom_i18n::t("audio.volume_note").contains("UI-sound"));
-    // zariadenia: predvolene vybrane, odpojene a vypnute maju stav v nazve; vsetko len na citanie
+    // vystupy: aktivne zariadenia ako prepinace, predvolene zaskrtnute; odpojene a vypnute sa nevypisuju
+    use transom_platform::menu_access::{ROLE_RADIOBUTTON, STATE_CHECKED};
     let find = |s: &str| {
         names
             .iter()
-            .position(|n| n.starts_with(s))
+            .position(|n| *n == s)
             .unwrap_or_else(|| panic!("{s}: {names:?}"))
     };
-    use transom_platform::menu_access::{ROLE_LISTITEM, STATE_SELECTED};
-    let sp = find("Speakers (Realtek), default");
-    assert_eq!(extras[sp].role, ROLE_LISTITEM);
-    assert!(extras[sp].state & STATE_SELECTED != 0);
-    assert!(names[find("HDMI Monitor")].contains("unplugged"));
-    assert!(names[find("Old Dock")].contains("disabled"));
-    for e in &extras {
-        if e.role == ROLE_LISTITEM {
-            assert!(e.action.is_empty());
-        }
-    }
+    let sp = find("Speakers (Realtek)");
+    assert_eq!(extras[sp].role, ROLE_RADIOBUTTON);
+    assert!(extras[sp].state & STATE_CHECKED != 0);
+    assert!(extras[sp].action.is_empty(), "predvoleny sa uz nevybera");
+    let usb = find("USB Headset");
+    assert_eq!(extras[usb].role, ROLE_RADIOBUTTON);
+    assert!(extras[usb].state & STATE_CHECKED == 0);
+    assert_eq!(extras[usb].action, transom_i18n::t("acc.select"));
+    assert!(!names
+        .iter()
+        .any(|n| n.contains("HDMI Monitor") || n.contains("Old Dock")));
 }
 
 #[test]
@@ -129,7 +119,6 @@ fn the_slider_and_mute_report_value_state_and_actions_and_unavailable_controls_a
     paint(
         &mut p,
         &snap(Some((40, true)), vec![dev("A", DeviceState::Active, true)]),
-        &all_quick(),
         96,
         1.0,
     );
@@ -163,7 +152,7 @@ fn the_slider_and_mute_report_value_state_and_actions_and_unavailable_controls_a
         mute: false,
     };
     let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
+    paint(&mut p, &s, 96, 1.0);
     let (entries, _, _, _) = p.a11y();
     assert!(entries
         .iter()
@@ -197,7 +186,7 @@ fn every_availability_state_has_an_honest_status_text_and_no_active_controls() {
         };
         s.generation = 2;
         let mut p = AudioPanel::default();
-        let issues = paint(&mut p, &s, &all_quick(), 96, 2.0);
+        let issues = paint(&mut p, &s, 96, 2.0);
         assert!(issues.is_empty(), "{av:?}: {issues:?}");
         let (entries, _, _, _) = p.a11y();
         assert!(
@@ -215,7 +204,7 @@ fn every_availability_state_has_an_honest_status_text_and_no_active_controls() {
         let (cmd, _) = p.key(0x09, false, false, &s);
         assert!(cmd.is_none());
         assert!(
-            matches!(p.focus, Some(AudioHit::Picker)),
+            matches!(p.focus, Some(AudioHit::SoundSettings)),
             "{av:?}: {:?}",
             p.focus
         );
@@ -227,7 +216,7 @@ fn volume_and_mute_commands_are_bounded_exact_and_mute_toggles_the_current_state
     let _g = en();
     let s = normal();
     let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
+    paint(&mut p, &s, 96, 1.0);
     // klavesy na posuvniku: 5 %, Shift 1 %, Page 10 %, Home/End, nikdy mimo 0..=100
     p.focus = Some(AudioHit::Slider);
     assert_eq!(
@@ -266,7 +255,7 @@ fn volume_and_mute_commands_are_bounded_exact_and_mute_toggles_the_current_state
     assert_eq!(step_percent(50, 0x41, false), None);
     // stlmenie: Enter na tlacidle prepne aktualny stav; drzanie klavesu (opakovanie) neprepina dookola
     let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
+    paint(&mut p, &s, 96, 1.0);
     p.focus = Some(AudioHit::Mute);
     assert_eq!(
         p.key(0x0D, false, false, &s).0,
@@ -285,7 +274,7 @@ fn the_mouse_drags_the_slider_clamps_at_the_ends_and_a_button_needs_press_and_re
     let _g = en();
     let s = normal();
     let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
+    paint(&mut p, &s, 96, 1.0);
     let (entries, _, _, _) = p.a11y();
     let sl = entries
         .iter()
@@ -308,10 +297,15 @@ fn the_mouse_drags_the_slider_clamps_at_the_ends_and_a_button_needs_press_and_re
     // po konci tahania pohyb uz nic nenastavuje
     let (c, _) = p.pointer(PointerKind::Move, sl.x, y, &s);
     assert_eq!(c, None);
-    // tlacidlo: stlacenie jedneho a uvolnenie nad inym nevykona nic
-    let pick = entries
+    // volba vystupu: klik na iny vystup ho poziada o predvoleny; klik na predvoleny nerobi nic
+    let usb = entries
         .iter()
-        .find(|e| e.name.starts_with(&transom_i18n::t("audio.picker")))
+        .find(|e| e.name == "USB Headset")
+        .unwrap()
+        .clone();
+    let spk = entries
+        .iter()
+        .find(|e| e.name == "Speakers (Realtek)")
         .unwrap()
         .clone();
     let sound = entries
@@ -319,12 +313,18 @@ fn the_mouse_drags_the_slider_clamps_at_the_ends_and_a_button_needs_press_and_re
         .find(|e| e.name.starts_with(&transom_i18n::t("audio.sound_settings")))
         .unwrap()
         .clone();
-    p.pointer(PointerKind::Down, pick.x + 5, pick.y + 5, &s);
+    p.pointer(PointerKind::Down, usb.x + 5, usb.y + 5, &s);
     let (c, _) = p.pointer(PointerKind::Click, sound.x + 5, sound.y + 5, &s);
+    assert_eq!(c, None, "stlacenie a uvolnenie nad inym ovladacom");
+    p.pointer(PointerKind::Down, usb.x + 5, usb.y + 5, &s);
+    let (c, _) = p.pointer(PointerKind::Click, usb.x + 5, usb.y + 5, &s);
+    assert_eq!(c, Some(AudioCmd::SetDefault(key("USB Headset"))));
+    p.pointer(PointerKind::Down, spk.x + 5, spk.y + 5, &s);
+    let (c, _) = p.pointer(PointerKind::Click, spk.x + 5, spk.y + 5, &s);
     assert_eq!(c, None);
-    p.pointer(PointerKind::Down, pick.x + 5, pick.y + 5, &s);
-    let (c, _) = p.pointer(PointerKind::Click, pick.x + 5, pick.y + 5, &s);
-    assert_eq!(c, Some(AudioCmd::Picker));
+    p.pointer(PointerKind::Down, sound.x + 5, sound.y + 5, &s);
+    let (c, _) = p.pointer(PointerKind::Click, sound.x + 5, sound.y + 5, &s);
+    assert_eq!(c, Some(AudioCmd::SoundSettings));
     // opustenie okna pocas tahania ho zrusi (koniec bez uvolnenia)
     p.pointer(PointerKind::Down, sl.x + 4, y, &s);
     p.pointer(PointerKind::Leave, -1, -1, &s);
@@ -332,11 +332,11 @@ fn the_mouse_drags_the_slider_clamps_at_the_ends_and_a_button_needs_press_and_re
 }
 
 #[test]
-fn tab_walks_every_control_once_in_visual_order_and_the_quick_actions_follow_the_config() {
+fn tab_walks_every_control_once_in_visual_order_and_enter_picks_an_output() {
     let _g = en();
     let s = normal();
     let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
+    paint(&mut p, &s, 96, 1.0);
     let mut order = Vec::new();
     for _ in 0..20 {
         p.key(0x09, false, false, &s);
@@ -349,43 +349,25 @@ fn tab_walks_every_control_once_in_visual_order_and_the_quick_actions_follow_the
     assert_eq!(
         order,
         vec![
+            AudioHit::Output(0),
+            AudioHit::Output(1),
             AudioHit::Mute,
             AudioHit::Slider,
-            AudioHit::Picker,
             AudioHit::SoundSettings,
-            AudioHit::Quick("quick_settings"),
-            AudioHit::Quick("notifications"),
-            AudioHit::Quick("search"),
-            AudioHit::Quick("tray"),
-            AudioHit::Quick("settings"),
         ]
     );
     // Shift+Tab ide spat a z prveho ovladaca na posledny
-    p.focus = Some(AudioHit::Mute);
+    p.focus = Some(AudioHit::Output(0));
     p.key(0x09, true, false, &s);
-    assert_eq!(p.focus, Some(AudioHit::Quick("settings")));
-    // vypnute rychle akcie sa nezobrazia a nie su v kruhu; prazdny zoznam skryje cely riadok
-    let mut p = AudioPanel::default();
-    paint(&mut p, &s, &["search".to_string()], 96, 1.0);
-    let (entries, _, _, _) = p.a11y();
-    assert!(entries
-        .iter()
-        .any(|e| e.name.starts_with(&transom_i18n::t("qa.search"))));
-    assert!(!entries
-        .iter()
-        .any(|e| e.name.starts_with(&transom_i18n::t("qa.tray"))));
-    let mut p = AudioPanel::default();
-    paint(&mut p, &s, &[], 96, 1.0);
-    let (entries, _, _, _) = p.a11y();
-    assert!(!entries.iter().any(|e| e.name == transom_i18n::t("qa.note")));
-    // Enter na rychlej akcii vrati prikaz s jej id (vykona ho App)
-    let mut p = AudioPanel::default();
-    paint(&mut p, &s, &all_quick(), 96, 1.0);
-    p.focus = Some(AudioHit::Quick("notifications"));
+    assert_eq!(p.focus, Some(AudioHit::SoundSettings));
+    // Enter na vystupe: iny = poziadat o predvoleny, predvoleny = nic
+    p.focus = Some(AudioHit::Output(1));
     assert_eq!(
         p.key(0x0D, false, false, &s).0,
-        Some(AudioCmd::Quick("notifications"))
+        Some(AudioCmd::SetDefault(key("USB Headset")))
     );
+    p.focus = Some(AudioHit::Output(0));
+    assert_eq!(p.key(0x0D, false, false, &s).0, None);
 }
 
 #[test]
@@ -394,18 +376,13 @@ fn every_button_name_says_that_it_opens_a_windows_surface_and_nothing_claims_a_c
     for lang in transom_i18n::Lang::ALL {
         transom_i18n::set_lang(lang);
         let mut p = AudioPanel::default();
-        paint(&mut p, &normal(), &all_quick(), 96, 1.0);
+        paint(&mut p, &normal(), 96, 1.0);
         let (entries, extras, _, _) = p.a11y();
         for (e, x) in entries.iter().zip(&extras) {
             if x.role == transom_platform::menu_access::ROLE_PUSHBUTTON {
                 let label_open = transom_i18n::tf("qa.acc", &["X"]);
                 let marker = label_open.replace("X", "");
-                let settings_open = transom_i18n::tf("qa.acc_settings", &["X"]).replace("X", "");
-                assert!(
-                    e.name.contains(marker.trim()) || e.name.contains(settings_open.trim()),
-                    "{lang:?}: {:?}",
-                    e.name
-                );
+                assert!(e.name.contains(marker.trim()), "{lang:?}: {:?}", e.name);
             }
         }
         // texty o vystupe nikdy netvrdia hotovu zmenu: prepnutie hlasi len "ohlasene Windows" po notifikacii
@@ -425,7 +402,7 @@ fn the_default_change_is_confirmed_only_after_core_audio_reports_it() {
         "audio.requested",
         &["Choose output in Windows"],
     ));
-    paint(&mut p, &a, &all_quick(), 96, 1.0);
+    paint(&mut p, &a, 96, 1.0);
     assert!(p.msg.as_deref().unwrap().starts_with("Requested:"));
     assert!(!p.msg.as_deref().unwrap().contains("default output:"));
     // Windows ohlasil zmenu predvoleneho vystupu: az teraz hlaska s novym nazvom
@@ -436,13 +413,13 @@ fn the_default_change_is_confirmed_only_after_core_audio_reports_it() {
         dev("USB Headset", DeviceState::Active, true),
         dev("Speakers (Realtek)", DeviceState::Active, false),
     ];
-    paint(&mut p, &b, &all_quick(), 96, 1.0);
+    paint(&mut p, &b, 96, 1.0);
     assert_eq!(
         p.msg.as_deref(),
         Some("Windows reported a new default output: USB Headset.")
     );
     // dalsie kreslenie bez novej zmeny hlasku nemeni
-    paint(&mut p, &b, &all_quick(), 96, 1.0);
+    paint(&mut p, &b, 96, 1.0);
     assert!(p.msg.as_deref().unwrap().contains("USB Headset"));
 }
 
@@ -516,10 +493,10 @@ fn the_panel_audit_is_clean_in_every_language_theme_dpi_and_state() {
                 let mut p = AudioPanel::default();
                 p.msg = Some(transom_i18n::tf(
                     "audio.requested",
-                    &[&transom_i18n::t("qa.quick_settings")],
+                    &[&transom_i18n::t("audio.sound_settings")],
                 ));
                 // dostatocne vysoka plocha: audit kontroluje cely obsah (v skutocnom okne ho posuva koliesko)
-                let issues = paint(&mut p, s, &all_quick(), dpi, 2.0);
+                let issues = paint(&mut p, s, dpi, 2.0);
                 for i in issues {
                     bad.push(format!("{} {dpi} {name}: {i}", lang.code()));
                 }
@@ -585,7 +562,7 @@ fn gallery_audio() {
                 let a = Arc::new(s.clone());
                 for _ in 0..2 {
                     let mut gp = GdiPainter::new(surf.dc, Size { w, h }, dpi);
-                    p.paint(&mut gp, &th, &a, &all_quick());
+                    p.paint(&mut gp, &th, &a);
                 }
                 crate::gallery::save(
                     &dir,
@@ -604,7 +581,7 @@ fn gallery_audio() {
     let mut p = AudioPanel::default();
     let a = Arc::new(normal());
     let (gw, rgba) = crate::gallery::glass_rgba_panel(w, h, dpi, &Theme::dark(), &mut |gp, t| {
-        p.paint(gp, t, &a, &all_quick())
+        p.paint(gp, t, &a)
     });
     crate::gallery::save_rgba(&dir, "audio-glass", gw, h, &rgba);
 }
@@ -652,7 +629,7 @@ fn panel_png() {
                 let a = Arc::new(s.clone());
                 for _ in 0..2 {
                     let mut gp = GdiPainter::new(surf.dc, Size { w, h }, 96);
-                    p.paint(&mut gp, &th, &a, &all_quick());
+                    p.paint(&mut gp, &th, &a);
                 }
                 let f = dir.join(format!(
                     "audio-{code}-{name}-{}.png",

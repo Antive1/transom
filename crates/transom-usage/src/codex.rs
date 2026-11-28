@@ -110,11 +110,7 @@ pub(crate) fn parse_line(
             }
             let snap = PlanSnapshot {
                 provider: Some(Provider::Codex),
-                plan: rl
-                    .get("plan_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
+                plan: plan_name(rl.get("plan_type").and_then(Value::as_str).unwrap_or("")),
                 windows,
                 recorded_at: ts.unwrap_or(0),
                 source: SnapshotSource::CodexSession,
@@ -227,6 +223,15 @@ pub fn read_dir(codex_home: &Path) -> (Vec<Event>, SourceStatus, Option<PlanSnap
     (events, st, plan)
 }
 
+/// Nazov planu na zobrazenie: `go` -> `Go`, `plus` -> `Plus` (rovnako ako plan Claude "Max 5×").
+fn plan_name(raw: &str) -> String {
+    let mut c = raw.trim().chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,7 +256,7 @@ mod tests {
         let (ev, snap) = parse_line(&mut st, COUNT);
         assert!(ev.is_none());
         let s = snap.unwrap();
-        assert_eq!(s.plan, "go");
+        assert_eq!(s.plan, "Go");
         assert_eq!(
             s.windows,
             vec![LimitWindow {

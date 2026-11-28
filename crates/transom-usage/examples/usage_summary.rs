@@ -16,6 +16,7 @@ fn main() {
     let src = Sources {
         claude_dir: Some(claude),
         codex_dir: Some(codex),
+        grok_dir: None,
         statusline_file: Some(transom_usage::cache::statusline_path()),
         archive: None,
     };

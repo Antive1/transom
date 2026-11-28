@@ -24,7 +24,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Accessibility::{IAccessible, LresultFromObject, NotifyWinEvent};
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    GetCapture, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -158,6 +158,8 @@ thread_local! {
     static POP: Cell<Option<Pop>> = const { Cell::new(None) };
     static TRACKING: Cell<bool> = const { Cell::new(false) };
     static ANIM: RefCell<Option<Anim>> = const { RefCell::new(None) };
+    /// Sklenene okno je skryte pred DWM, kym sa prvy raz nevykresli (pozri `glass::cloak`).
+    static CLOAKED: Cell<bool> = const { Cell::new(false) };
     /// Snimky animacie otvarania zladene s obrazovkou.
     static PACE: RefCell<Option<crate::vsync::Pacer>> = const { RefCell::new(None) };
     /// Dva prechody a vystup skleneneho panelu (znovu pouzite medzi prekresleniami rovnakej velkosti).
@@ -396,7 +398,7 @@ fn create_popover(
                 c.set(Some(p));
             }
         });
-        if let Some(st) = glass {
+        if glass.is_some() {
             // rohy (pripojeny panel len spodne) aj okraj v nich kresli sklo samo, vyhladene: DWM nezaobluje
             let round: i32 = 1;
             let _ = DwmSetWindowAttribute(
@@ -405,10 +407,10 @@ fn create_popover(
                 &round as *const i32 as *const _,
                 4,
             );
-            if animate {
-                // pred zobrazenim: viditelny len prvy riadok (ziadny zablesk celeho okna)
-                reveal_region(hwnd, w0, h0, 1, anchor.1 >= 0.5 && !menu_attached(&st), dpi);
-            }
+            // pred zobrazenim skryte pred DWM: odkryje ho az prve vykreslenie (ziadny zablesk celeho okna). Pocas
+            // vysuvania sa okno neorezava oblastou: neodkryta cast je priehladna (`LayeredBuf::clear_outside`).
+            crate::glass::cloak(hwnd, true);
+            CLOAKED.with(|c| c.set(true));
             crate::glass::set_glass(hwnd, true);
         }
         anim_clear();
@@ -458,11 +460,19 @@ fn menu_attached(st: &crate::glass::GlassStyle) -> bool {
 }
 
 /// Viditelna cast okna pocas vysuvania (`v` riadkov zhora alebo zdola), so zaoblenim ako ma panel.
-fn reveal_region(hwnd: HWND, w: i32, h: i32, v: i32, from_bottom: bool, dpi: u32) {
+#[allow(clippy::too_many_arguments)]
+fn reveal_region(hwnd: HWND, w: i32, h: i32, v: i32, from_bottom: bool, dpi: u32, glass: bool) {
     let r = (8 * dpi as i32 / 96).max(4);
     let (y0, y1) = if from_bottom { (h - v, h) } else { (0, v) };
     // SAFETY: oblast prevezme okno (netreba ju uvolnit).
     unsafe {
+        if glass {
+            // sklo: rovna oblast (zaoblena oblast okna ma tvrdy okraj a DWM na jej oblucku nad sklom ukazal biele
+            // pixely); zaoblene rohy dokresli sklo na konci animacie
+            let rgn = windows::Win32::Graphics::Gdi::CreateRectRgn(0, y0, w, y1);
+            let _ = SetWindowRgn(hwnd, Some(rgn), true);
+            return;
+        }
         // vysuva sa z listy: hore rovno (tvar hornych rohov a vyduty prechod kresli sklo), zaoblene len spodne rohy;
         // inak by sa horne rohy na konci animacie zmenili a bliklo by to
         let top = if from_bottom { y0 } else { y0 - 2 * r };
@@ -499,8 +509,13 @@ fn anim_step(hwnd: HWND) {
             let _ = InvalidateRect(Some(hwnd), None, false);
             return;
         }
+        if p.glass.is_some() {
+            // sklo: kazda snimka dokresli odkryte riadky (bez oblasti okna)
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            return;
+        }
         let (y0, y1) = reveal_rows(to.3, ms, from_bottom);
-        reveal_region(hwnd, to.2, to.3, y1 - y0, from_bottom, p.dpi);
+        reveal_region(hwnd, to.2, to.3, y1 - y0, from_bottom, p.dpi, false);
         // obsah sa prekresluje len pocas roztmievania (potom sa meni uz len oblast okna)
         if ms <= FADE_MS + FRAME_MS as f32 {
             let _ = InvalidateRect(Some(hwnd), None, false);
@@ -538,6 +553,7 @@ fn paint_glass(hdc: HDC, kind: u32, dpi: u32, rc: RECT, st: &crate::glass::Glass
     let Some(mut b) = buf else {
         return;
     };
+    let painting = std::time::Instant::now();
     if !reuse {
         for (dc, bd) in [
             (b.black_dc(), (0u8, 0u8, 0u8)),
@@ -584,8 +600,7 @@ fn paint_glass(hdc: HDC, kind: u32, dpi: u32, rc: RECT, st: &crate::glass::Glass
     let area = match anim {
         Some((ms, anchor)) => {
             let from_bottom = anchor.1 >= 0.5 && !menu_attached(st);
-            // o snimku dopredu: kym pride dalsie prekreslenie, oblast sa este posunie
-            let (y0, y1) = reveal_rows(fh, ms + 2.0 * FRAME_MS as f32, from_bottom);
+            let (y0, y1) = reveal_rows(fh, ms, from_bottom);
             crate::layered::Area {
                 x0: 0,
                 y0,
@@ -596,7 +611,29 @@ fn paint_glass(hdc: HDC, kind: u32, dpi: u32, rc: RECT, st: &crate::glass::Glass
         None => crate::layered::Area::full(fw, fh),
     };
     b.compose_glass(area, st, content);
-    b.blit(hdc, area);
+    if anim.is_some() {
+        // neodkryta cast okna je priehladna (okno sa neorezava oblastou); kresli sa cele okno
+        b.clear_outside(area);
+        b.blit(hdc, crate::layered::Area::full(fw, fh));
+    } else {
+        b.blit(hdc, area);
+    }
+    // prve (tazke) vykreslenie obsahu sa do animacie nepocita: inak by bola prva viditelna snimka uz skoro na konci
+    // a panel by sa "zjavil"
+    if !reuse && anim.is_some() {
+        let spent = painting.elapsed();
+        ANIM.with(|a| {
+            if let Some(a) = a.borrow_mut().as_mut() {
+                a.t0 += spent;
+            }
+        });
+    }
+    if CLOAKED.with(|c| c.replace(false)) {
+        crate::glass::cloak(
+            unsafe { windows::Win32::Graphics::Gdi::WindowFromDC(hdc) },
+            false,
+        );
+    }
     FRAME.with(|f| *f.borrow_mut() = Some(b));
 }
 
@@ -1118,6 +1155,17 @@ unsafe extern "system" fn popover_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 if kind.is_some_and(|p| p.menu) && lp.0 != hwnd.0 as isize {
                     request(Request::ClosePopover);
                 }
+                // panel: mys pocas tahania vzalo ine okno (Alt+Tab, systemove okno) - tahanie sa ukonci
+                if let Some(p) = kind.filter(|p| !p.menu) {
+                    if lp.0 != 0 && lp.0 != hwnd.0 as isize {
+                        emit(BarEvent::PopoverPointer {
+                            kind: p.kind,
+                            pointer: PointerKind::Leave,
+                            x: -1,
+                            y: -1,
+                        });
+                    }
+                }
                 LRESULT(0)
             }
             WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP => {
@@ -1135,6 +1183,11 @@ unsafe extern "system" fn popover_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     let fl = p.glass.map_or(0, |g| popover_flare(&g, p.dpi));
                     let x = (lp.0 & 0xFFFF) as u16 as i16 as i32 - fl;
                     let y = ((lp.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+                    // panel: pocas stlacenia drzi mys (tahanie posuvnika pokracuje aj mimo okna, napr. hlasitost
+                    // rychlo az na 0); menu ma mys zachytenu stale
+                    if msg == WM_LBUTTONDOWN && !p.menu {
+                        SetCapture(hwnd);
+                    }
                     emit(BarEvent::PopoverPointer {
                         kind: p.kind,
                         pointer: match msg {
@@ -1145,11 +1198,27 @@ unsafe extern "system" fn popover_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                         x,
                         y,
                     });
+                    if msg == WM_LBUTTONUP && !p.menu && GetCapture() == hwnd {
+                        let _ = ReleaseCapture();
+                        // mys uz moze byt mimo okna: nove sledovanie posle odchod hned
+                        TRACKING.with(|t| t.set(true));
+                        let mut t = TRACKMOUSEEVENT {
+                            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                            dwFlags: TME_LEAVE,
+                            hwndTrack: hwnd,
+                            dwHoverTime: 0,
+                        };
+                        let _ = TrackMouseEvent(&mut t);
+                    }
                 }
                 LRESULT(0)
             }
             WM_MOUSELEAVE => {
                 TRACKING.with(|t| t.set(false));
+                // pocas tahania (mys zachytena panelom) odchod nie je koniec: dalsi pohyb sledovanie obnovi
+                if kind.is_some_and(|p| !p.menu) && GetCapture() == hwnd {
+                    return LRESULT(0);
+                }
                 if let Some(p) = kind {
                     emit(BarEvent::PopoverPointer {
                         kind: p.kind,

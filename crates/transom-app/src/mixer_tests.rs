@@ -15,6 +15,7 @@ fn audio() -> Snapshot {
         availability: Availability::Ok,
         devices: vec![Device {
             name: "Speakers (Realtek)".into(),
+            key: 1,
             state: DeviceState::Active,
             is_default: true,
         }],
@@ -90,7 +91,7 @@ fn paint(panel: &mut AudioPanel, m: &MixSnap, dpi: u32, th: &Theme) -> Vec<Strin
     for _ in 0..2 {
         let mut gp = GdiPainter::new(surf.dc, Size { w, h }, dpi);
         let mut au = Audit::new(&mut gp, th.background);
-        panel.paint_with(&mut au, th, &a, &[], Some(Arc::clone(&mm)), None);
+        panel.paint_with(&mut au, th, &a, Some(Arc::clone(&mm)), None);
         au.finish();
         out = au.issues.iter().map(|i| format!("{i:?}")).collect();
     }
@@ -283,7 +284,7 @@ fn mixer_png() {
             let m = Arc::new(mix(true));
             for _ in 0..2 {
                 let mut gp = GdiPainter::new(surf.dc, Size { w, h }, 96);
-                p.paint_with(&mut gp, &th, &a, &[], Some(Arc::clone(&m)), None);
+                p.paint_with(&mut gp, &th, &a, Some(Arc::clone(&m)), None);
             }
             let f = dir.join(format!(
                 "mixer-{code}-{}.png",

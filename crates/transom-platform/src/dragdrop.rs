@@ -56,6 +56,8 @@ const EXPAND_MS: f32 = 180.0;
 const COLLAPSE_MS: f32 = 140.0;
 /// Sprava riadiacemu oknu: spracovat frontu pusteni (`pump`).
 pub(crate) const WM_TRANSOM_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 0x38;
+/// Odlozeny prvy krok animacie vybezku (po navrate z obsluhy aplikacie, ked sa da hned kreslit).
+const WM_NOTCH_TICK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 0x39;
 
 /// Efekt pustenia: len kopirovanie (nikdy presun, ktory by zdroju zmazal originaly) a len ak ide o zoznam suborov.
 pub fn effect_for(allowed: DROPEFFECT, accepting: bool) -> DROPEFFECT {
@@ -142,11 +144,23 @@ pub(crate) fn post_color(c: Option<(u8, u8, u8)>) {
     post(Q::Color(c));
 }
 
+/// Hotovy obraz vybezku a jeho kluc (sirka, vyska okna, posun obsahu).
+type NotchFrame = ((i32, i32, i32), crate::layered::LayeredBuf);
+
 thread_local! {
     static OLE: Cell<bool> = const { Cell::new(false) };
     static QUEUE: RefCell<VecDeque<Q>> = const { RefCell::new(VecDeque::new()) };
     static NOTCH: RefCell<Option<NotchState>> = const { RefCell::new(None) };
     static DRAGGING: Cell<bool> = const { Cell::new(false) };
+    /// Hotovy obraz vybezku so sklom (kluc: sirka, vyska okna a posun obsahu). Pocas animacie sa len ukazuje jeho
+    /// cast: obsah sa neprekresluje (plynule, a pri zbaleni sa neprepne na iny obsah).
+    static NFRAME: RefCell<Option<NotchFrame>> = const { RefCell::new(None) };
+    /// Vybezok je skryty pred DWM (`glass::cloak`), kym sa prvy raz naozaj nevykresli: inak by Windows na okamih ukazal
+    /// obraz z minuleho otvorenia (cely ostrov) a az potom by zacala animacia.
+    /// 0 = odkryty, 1 = skryty pri prvom zobrazeni (animacia zacne az po vykresleni), 2 = skryty pri zmene velkosti.
+    static NCLOAKED: Cell<u8> = const { Cell::new(0) };
+    /// Okna zaregistrovane ako ciel pustenia (lista na kazdom monitore, vybezok): po tahani sa prekreslia vsetky.
+    static TARGETS: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Test (`--test-tools`): vlozi pustenie zoznamu ciest do tej istej fronty ako skutocne OLE pustenie. Neoveruje OLE vrstvu OS
@@ -367,6 +381,14 @@ fn read_files(d: &IDataObject) -> Vec<String> {
 #[implement(IDropTarget)]
 struct DropTarget {
     accepting: Cell<bool>,
+    hwnd: HWND,
+    /// Pomocnik shellu: kresli obrazok tahania (napr. z prehliadaca) nad nasim oknom a po pusteni / odchode ho skryje.
+    /// Bez neho by obrazok ostal visiet tam, kde ho naposledy kreslil zdroj.
+    helper: Option<windows::Win32::UI::Shell::IDropTargetHelper>,
+}
+
+fn pt(p: &POINTL) -> windows::Win32::Foundation::POINT {
+    windows::Win32::Foundation::POINT { x: p.x, y: p.y }
 }
 
 #[allow(non_snake_case)]
@@ -375,15 +397,25 @@ impl IDropTarget_Impl for DropTarget_Impl {
         &self,
         pdataobj: Ref<'_, IDataObject>,
         _grfkeystate: MODIFIERKEYS_FLAGS,
-        _pt: &POINTL,
+        ppt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         // vlastne tahanie von (z Police v liste / panela) sa na listu znova neprida
         let ok = !dragging() && has_files(pdataobj.as_ref());
         self.accepting.set(ok);
+        let mut eff = DROPEFFECT_NONE;
         if !pdweffect.is_null() {
             // SAFETY: OLE dodava platny ukazovatel na efekt.
-            unsafe { *pdweffect = effect_for(*pdweffect, ok) };
+            unsafe {
+                *pdweffect = effect_for(*pdweffect, ok);
+                eff = *pdweffect;
+            }
+        }
+        if let (Some(h), Some(d)) = (&self.helper, pdataobj.as_ref()) {
+            // SAFETY: platne okno, data a bod pocas volania.
+            unsafe {
+                let _ = h.DragEnter(self.hwnd, d, &pt(ppt), eff);
+            }
         }
         if ok {
             notch_enter();
@@ -395,17 +427,34 @@ impl IDropTarget_Impl for DropTarget_Impl {
     fn DragOver(
         &self,
         _grfkeystate: MODIFIERKEYS_FLAGS,
-        _pt: &POINTL,
+        ppt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
+        let mut eff = DROPEFFECT_NONE;
         if !pdweffect.is_null() {
             // SAFETY: OLE dodava platny ukazovatel na efekt.
-            unsafe { *pdweffect = effect_for(*pdweffect, self.accepting.get()) };
+            unsafe {
+                *pdweffect = effect_for(*pdweffect, self.accepting.get());
+                eff = *pdweffect;
+            }
+        }
+        if let Some(h) = &self.helper {
+            // SAFETY: bod plati pocas volania.
+            unsafe {
+                let _ = h.DragOver(&pt(ppt), eff);
+            }
         }
         Ok(())
     }
 
     fn DragLeave(&self) -> windows::core::Result<()> {
+        if let Some(h) = &self.helper {
+            // SAFETY: bez argumentov; skryje obrazok tahania nad nasim oknom.
+            unsafe {
+                let _ = h.DragLeave();
+            }
+        }
+        self.repaint();
         if self.accepting.replace(false) {
             notch_leave();
             post(Q::Leave);
@@ -417,10 +466,22 @@ impl IDropTarget_Impl for DropTarget_Impl {
         &self,
         pdataobj: Ref<'_, IDataObject>,
         _grfkeystate: MODIFIERKEYS_FLAGS,
-        _pt: &POINTL,
+        ppt: &POINTL,
         pdweffect: *mut DROPEFFECT,
     ) -> windows::core::Result<()> {
         let accepted = self.accepting.replace(false);
+        // obrazok tahania sa skryje hned (citanie dat z prehliadaca moze chvilu trvat)
+        if let (Some(h), Some(d)) = (&self.helper, pdataobj.as_ref()) {
+            let eff = if accepted {
+                DROPEFFECT_COPY
+            } else {
+                DROPEFFECT_NONE
+            };
+            // SAFETY: platne data a bod pocas volania.
+            unsafe {
+                let _ = h.Drop(d, &pt(ppt), eff);
+            }
+        }
         let mut effect = DROPEFFECT_NONE;
         if accepted {
             if let Some(d) = pdataobj.as_ref() {
@@ -443,7 +504,74 @@ impl IDropTarget_Impl for DropTarget_Impl {
             unsafe { *pdweffect = effect };
         }
         notch_collapse_now();
+        self.repaint();
         Ok(())
+    }
+}
+
+impl DropTarget {
+    /// Obrazok tahania kresli Windows priamo do okien pod kurzorom; po odchode / pusteni tam jeho pixely ostanu, kym sa
+    /// okno neprekresli (napr. stred listy s ostrovom, nad ktorym kurzor presiel cestou do vybezku). Prekreslia sa preto
+    /// vsetky nase ciele hned a este raz po chvili (az Windows tahanie celkom ukonci).
+    fn repaint(&self) {
+        if self.hwnd.is_invalid() {
+            return;
+        }
+        repaint_targets();
+        // SAFETY: jednorazovy casovac vlakna (bez okna); spracuje ho slucka sprav tohto vlakna.
+        unsafe {
+            SetTimer(None, 0, 250, Some(repaint_later));
+        }
+    }
+}
+
+fn repaint_targets() {
+    TARGETS.with(|t| {
+        for &h in t.borrow().iter() {
+            // SAFETY: zaregistrovane okno tohto vlakna (pri zaniku sa odoberie v `revoke`); len oznaci prekreslenie.
+            unsafe {
+                let _ = InvalidateRect(Some(HWND(h as *mut _)), None, false);
+            }
+        }
+    });
+}
+
+unsafe extern "system" fn repaint_later(_h: HWND, _m: u32, id: usize, _t: u32) {
+    // SAFETY: jednorazovy casovac: zrusi sa pri prvom spusteni.
+    unsafe {
+        let _ = KillTimer(None, id);
+    }
+    repaint_targets();
+    if !mouse_button_down() {
+        hide_stale_drag_images();
+    }
+}
+
+/// Po skonceni tahania skryje zabudnute okna obrazka tahania (`SysDragImage`). Chromium (Chrome, Edge, Brave) si ho
+/// vytvori, ked kurzor prejde nad prehliadacom, a ked sa pusti inde, nechá ho viditelne (biely obdlznik a symbol ⊘ ostanu
+/// na obrazovke). Vola sa len ked uz nie je stlacene tlacidlo mysi, takze ziadne tahanie neprebieha.
+fn hide_stale_drag_images() {
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetClassNameW, IsWindowVisible};
+    unsafe extern "system" fn each(h: HWND, _l: LPARAM) -> BOOL {
+        let mut buf = [0u16; 32];
+        // SAFETY: platne okno z enumeracie, buffer s dlzkou.
+        let n = unsafe { GetClassNameW(h, &mut buf) } as usize;
+        if String::from_utf16_lossy(&buf[..n.min(buf.len())]) == "SysDragImage"
+            // SAFETY: platne okno z enumeracie.
+            && unsafe { IsWindowVisible(h) }.as_bool()
+        {
+            // SAFETY: skrytie okna obrazka tahania (nic sa nemaze; dalsie tahanie si ho znova ukaze).
+            unsafe {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
+        }
+        BOOL(1)
+    }
+    // SAFETY: enumeracia hornych okien s callbackom bez stavu.
+    unsafe {
+        let _ = EnumWindows(Some(each), LPARAM(0));
     }
 }
 
@@ -452,15 +580,31 @@ pub fn register(hwnd: HWND) -> bool {
     if !OLE.with(|o| o.get()) {
         return false;
     }
+    // SAFETY: COM je inicializovane (`OleInitialize`); pri zlyhani sa obrazok tahania len nekresli.
+    let helper = unsafe {
+        windows::Win32::System::Com::CoCreateInstance(
+            &windows::Win32::UI::Shell::CLSID_DragDropHelper,
+            None,
+            windows::Win32::System::Com::CLSCTX_INPROC_SERVER,
+        )
+        .ok()
+    };
     let t: IDropTarget = DropTarget {
         accepting: Cell::new(false),
+        hwnd,
+        helper,
     }
     .into();
     // SAFETY: platne okno tohto vlakna po `OleInitialize`.
-    unsafe { RegisterDragDrop(hwnd, &t) }.is_ok()
+    let ok = unsafe { RegisterDragDrop(hwnd, &t) }.is_ok();
+    if ok {
+        TARGETS.with(|v| v.borrow_mut().push(hwnd.0 as isize));
+    }
+    ok
 }
 
 pub fn revoke(hwnd: HWND) {
+    TARGETS.with(|v| v.borrow_mut().retain(|h| *h != hwnd.0 as isize));
     if OLE.with(|o| o.get()) {
         // SAFETY: odregistrovanie pred zanikom okna.
         unsafe {
@@ -490,7 +634,10 @@ struct NotchState {
     browse: bool,
     /// Mys je nad vybezkom (zbalenie sa odklada).
     hover: bool,
-    /// Farba listy nad vybezkom (precitana z obrazovky pri otvoreni) - zaciatok nabehu skla.
+    /// Pocas animacie so sklom viditelna cast okna (x, sirka, vyska); zvysok sa kresli priehladny (okno sa neorezava).
+    reveal: Option<(i32, i32, i32)>,
+    /// Skutocna farba listy vedla vybezku (precitana z obrazovky pri otvoreni) - zaciatok nabehu skla. Pri priehladnej
+    /// liste je to farba toho, co je pod nou; nastavenie listy ju nepozna.
     lead_color: Option<(u8, u8, u8)>,
     /// Kde okno naozaj lezi (x, y, w, h); animuje sa len jeho viditelna cast, nie velkost.
     placed: (i32, i32, i32, i32),
@@ -543,13 +690,41 @@ fn notch_region(hwnd: HWND, rx: i32, w: i32, v: i32, dpi: u32, whole_glass: bool
     // SAFETY: oblast prevezme okno.
     unsafe {
         if whole_glass {
+            NOTCH.with(|n| {
+                if let Some(s) = n.borrow_mut().as_mut() {
+                    s.reveal = None;
+                }
+            });
             let _ = SetWindowRgn(hwnd, None, true);
             return;
         }
+        if glass_region_flat() {
+            // sklo: bez oblasti okna (DWM by novo odkryty pas pri kazdom zvacseni oblasti na snimku ukazal bielo);
+            // neodkryta cast sa kresli priehladna
+            NOTCH.with(|n| {
+                if let Some(s) = n.borrow_mut().as_mut() {
+                    s.reveal = Some((rx, w, v.max(1)));
+                }
+            });
+            let _ = SetWindowRgn(hwnd, None, false);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            return;
+        }
         let r = (NOTCH_CORNER_LP * dpi as i32 / 96).min(v.max(2) / 2);
-        let rgn = CreateRoundRectRgn(rx, -2 * r, rx + w + 1, v.max(1) + 1, 2 * r, 2 * r);
+        // sklo pocas vysuvania: rovny spodok (zaoblena oblast okna ma tvrdy okraj a DWM na jej oblucku nad sklom
+        // ukazal biele pixely); zaoblene rohy dokresli sklo na konci animacie
+        let rgn = if glass_region_flat() {
+            windows::Win32::Graphics::Gdi::CreateRectRgn(rx, 0, rx + w, v.max(1))
+        } else {
+            CreateRoundRectRgn(rx, -2 * r, rx + w + 1, v.max(1) + 1, 2 * r, 2 * r)
+        };
         let _ = SetWindowRgn(hwnd, Some(rgn), true);
     }
+}
+
+/// Ma vybezok sklo (oblast pocas animacie je potom rovna, rohy kresli sklo).
+fn glass_region_flat() -> bool {
+    NOTCH.with(|n| n.borrow().as_ref().is_some_and(|s| s.glass))
 }
 
 fn ease_out(t: f32) -> f32 {
@@ -608,12 +783,22 @@ unsafe extern "system" fn notch_proc(
                 sync_notch_glass(hwnd);
                 let mut glass = None;
                 with_handler(|hd| glass = hd.popover_glass(NOTCH_KIND));
+                let reveal = NOTCH.with(|n| n.borrow().as_ref().and_then(|s| s.reveal));
+                let key = st.map(|s| (ww, wh, s.3));
+                // pocas animacie hotovy obraz z jej zaciatku (ak sedi velkost)
+                let cached = NFRAME
+                    .with(|f| f.borrow_mut().take())
+                    .filter(|(k, _)| reveal.is_some() && Some(*k) == key)
+                    .map(|(_, b)| b);
+                let fresh = cached.is_none();
                 let glass_buf = match (st, glass) {
-                    (Some(_), Some(_)) => crate::layered::LayeredBuf::new(ww, wh),
+                    (Some(_), Some(_)) => {
+                        cached.or_else(|| crate::layered::LayeredBuf::new(ww, wh))
+                    }
                     _ => None,
                 };
                 if let (Some((w, h, dpi, ox)), Some(mut gs), Some(mut b)) = (st, glass, glass_buf) {
-                    // nabeh z farby listy je v lp: prepocet na DPI vybezku
+                    // nabeh z farby listy je v lp: prepocet na DPI vybezku; zacina skutocnou farbou listy na obrazovke
                     if let Some(l) = gs.lead.as_mut() {
                         l.px = l.px * dpi as i32 / 96;
                         l.adopt(NOTCH.with(|n| n.borrow().as_ref().and_then(|s| s.lead_color)));
@@ -623,10 +808,12 @@ unsafe extern "system" fn notch_proc(
                     gs.flare = NOTCH_FLARE_LP * dpi as i32 / 96;
                     let fl = gs.flare;
                     // dva prechody (cierne a biele pozadie) -> alfa po pixeloch, zlozene nad sklo
-                    for (dc, bd) in [
-                        (b.black_dc(), (0u8, 0u8, 0u8)),
-                        (b.white_dc(), (255, 255, 255)),
-                    ] {
+                    let passes: &[(windows::Win32::Graphics::Gdi::HDC, (u8, u8, u8))] = if fresh {
+                        &[(b.black_dc(), (0, 0, 0)), (b.white_dc(), (255, 255, 255))]
+                    } else {
+                        &[]
+                    };
+                    for &(dc, bd) in passes {
                         let ctx = crate::popup::PopoverPaint {
                             hdc: dc,
                             w: w - 2 * fl,
@@ -660,8 +847,47 @@ unsafe extern "system" fn notch_proc(
                             windows::Win32::Graphics::Gdi::SetViewportOrgEx(dc, old.x, old.y, None);
                     }
                     let area = crate::layered::Area::full(ww, wh);
-                    b.compose_glass(area, &gs, 255);
-                    b.blit(hdc, area);
+                    if fresh {
+                        b.compose_glass(area, &gs, 255);
+                    }
+                    match reveal {
+                        Some((rx, rw, v)) => {
+                            // len odkryta cast; zvysok okna priehladny (BLACKNESS = nulove pixely aj alfa)
+                            let (x1, v) = ((rx + rw).min(ww), v.min(wh));
+                            b.blit(
+                                hdc,
+                                crate::layered::Area {
+                                    x0: rx.max(0),
+                                    y0: 0,
+                                    x1,
+                                    y1: v,
+                                },
+                            );
+                            use windows::Win32::Graphics::Gdi::{PatBlt, BLACKNESS};
+                            let _ = PatBlt(hdc, 0, 0, rx.max(0), wh, BLACKNESS);
+                            let _ = PatBlt(hdc, x1, 0, ww - x1, wh, BLACKNESS);
+                            let _ = PatBlt(hdc, rx.max(0), v, x1 - rx.max(0), wh - v, BLACKNESS);
+                        }
+                        None => b.blit(hdc, area),
+                    }
+                    let was = NCLOAKED.with(|c| c.replace(0));
+                    if was != 0 {
+                        crate::glass::cloak(hwnd, false);
+                    }
+                    if was == 1 {
+                        // animacia zacina az teraz: prve vykreslenie (pri vysokom DPI desiatky ms, alebo odlozene, kym
+                        // bola obsluha aplikacie zaneprazdnena) sa do nej nepocita
+                        NOTCH.with(|n| {
+                            if let Some(s) = n.borrow_mut().as_mut() {
+                                if s.animating {
+                                    s.t0 = Instant::now();
+                                }
+                            }
+                        });
+                    }
+                    if let Some(k) = key {
+                        NFRAME.with(|f| *f.borrow_mut() = Some((k, b)));
+                    }
                 } else if let Some((w, h, dpi, ox)) = st {
                     // kresli sa cely vybezok (plna velkost); viditelna je len cast podla aktualnej vysky okna
                     if ox != 0 || rc.right != w || rc.bottom != h {
@@ -704,7 +930,15 @@ unsafe extern "system" fn notch_proc(
                     let _ = DeleteObject(bmp.into());
                     let _ = DeleteDC(mem);
                 }
+                // bez skla (alebo ked sa sklo medzitym vyplo) sa okno odkryje po kazdom vykresleni
+                if NCLOAKED.with(|c| c.replace(0)) != 0 {
+                    crate::glass::cloak(hwnd, false);
+                }
                 let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_NOTCH_TICK => {
+                notch_tick();
                 LRESULT(0)
             }
             WM_TIMER if wp.0 == T_ANIM => {
@@ -841,8 +1075,9 @@ fn ensure_notch() -> Option<HWND> {
                 dur_ms: 0.0,
                 glass: false,
                 browse: false,
-                hover: false,
                 lead_color: None,
+                reveal: None,
+                hover: false,
                 placed: (0, 0, 0, 0),
                 animating: false,
                 cx: 0.0,
@@ -940,6 +1175,10 @@ fn animate_to(target: f32, dur: f32) {
     }) else {
         return;
     };
+    if target > 0.0 {
+        // otvaranie: obraz z minuleho otvorenia (ina skladba, ina karta) sa nepouzije
+        NFRAME.with(|f| f.borrow_mut().take());
+    }
     if !was {
         NPACE.with(|p| *p.borrow_mut() = Some(crate::vsync::Pacer::start(hwnd, T_ANIM)));
     }
@@ -951,7 +1190,16 @@ fn animate_to(target: f32, dur: f32) {
             }
         });
     }
-    notch_tick();
+    if crate::appbar::handler_busy() {
+        // volane z obsluhy aplikacie (klik na ostrov): ta teraz nemoze kreslit, takze okno by sa ukazalo prazdne (biele)
+        // alebo so starym obrazom. Ako pri paneloch: prvy krok az po navrate do slucky sprav, kde sa vykresli hned.
+        // SAFETY: sprava vlastnemu oknu.
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_NOTCH_TICK, WPARAM(0), LPARAM(0));
+        }
+    } else {
+        notch_tick();
+    }
     // spodna ciara listy pod vybezkom (zmizne / vrati sa)
     crate::appbar::invalidate_all();
 }
@@ -1028,6 +1276,12 @@ fn notch_tick() {
         let rx = cx.round() as i32 - want.0;
         let rw = (cw.round() as i32).min(want.2);
         if placed != want {
+            // nove alebo zmenene okno so sklom ma pred prvym vykreslenim bielu plochu: skryte pred DWM, kym sa nevykresli
+            if glass {
+                crate::glass::cloak(hwnd, true);
+                let first = placed == (0, 0, 0, 0);
+                NCLOAKED.with(|c| c.set(if first || c.get() == 1 { 1 } else { 2 }));
+            }
             // najprv oblast (viditelna len cast), potom poloha a okamzite vykreslenie - ziadny zablesk
             notch_region(hwnd, rx, rw, vis, dpi, end && glass);
             let _ = SetWindowPos(
@@ -1095,9 +1349,7 @@ pub fn notch_browse_at(anchor_x: Option<i32>, h_lp: Option<i32>) {
                 let open = s.to > 0.0;
                 let same = open && s.h == h && s.x == x;
                 if !open {
-                    // farba listy tesne nad vybezkom, kym este nie je vysunuty
-                    let gap = (2 * dpi as i32 / 96).max(2);
-                    s.lead_color = crate::glass::screen_color(x, x + w, y - gap);
+                    s.lead_color = bar_color_beside(x, y, w, dpi);
                 }
                 s.browse = true;
                 (s.x, s.y, s.w, s.h, s.dpi) = (x, y, w, h, dpi);
@@ -1159,8 +1411,12 @@ fn notch_enter() {
         return;
     };
     let already = NOTCH.with(|n| n.borrow().as_ref().is_some_and(|s| s.to > 0.0));
+    let seen = (!already).then(|| bar_color_beside(x, y, w, dpi)).flatten();
     NOTCH.with(|n| {
         if let Some(s) = n.borrow_mut().as_mut() {
+            if !already {
+                s.lead_color = seen;
+            }
             s.browse = false;
             s.x = x;
             s.y = y;
@@ -1174,6 +1430,24 @@ fn notch_enter() {
         notch_tick();
     } else {
         animate_to(h as f32, EXPAND_MS);
+    }
+}
+
+/// Farba listy na obrazovke tesne nad vybezkom (`x`, `y`, `w`), citana **vedla** neho: nad nim je ostrov a pri tahani
+/// obrazok tahania, ktore by farbu zasivili. Priemer z lavej a pravej strany.
+fn bar_color_beside(x: i32, y: i32, w: i32, dpi: u32) -> Option<(u8, u8, u8)> {
+    let px = |v: i32| v * dpi as i32 / 96;
+    let row = y - px(2).max(2);
+    let (gap, len) = (px(NOTCH_FLARE_LP + 8), px(80));
+    let left = crate::glass::screen_color(x - gap - len, x - gap, row);
+    let right = crate::glass::screen_color(x + w + gap, x + w + gap + len, row);
+    match (left, right) {
+        (Some(a), Some(b)) => Some((
+            ((a.0 as u16 + b.0 as u16) / 2) as u8,
+            ((a.1 as u16 + b.1 as u16) / 2) as u8,
+            ((a.2 as u16 + b.2 as u16) / 2) as u8,
+        )),
+        (a, b) => a.or(b),
     }
 }
 
@@ -1596,6 +1870,8 @@ mod tests {
             unsafe { Ole(None).unwrap() };
             let target: IDropTarget = DropTarget {
                 accepting: Cell::new(false),
+                hwnd: HWND::default(),
+                helper: None,
             }
             .into();
             let files: IDataObject = Fake {

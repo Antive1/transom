@@ -377,6 +377,20 @@ pub fn system_allows() -> bool {
 
 /// Zapne / vypne priehladnost okna (alfa pixelov, bez rozmazania): `DwmEnableBlurBehindWindow` s prazdnou
 /// oblastou rozmazania. `false` = volanie zlyhalo (okno ostane nepriehladne).
+/// Skryje okno pred skladanim obrazovky (DWM), hoci je "zobrazene": prve vykreslenie prebehne bez zablesku.
+pub fn cloak(hwnd: HWND, on: bool) {
+    let v: i32 = on.into();
+    // SAFETY: platne okno; atribut DWMWA_CLOAK (13) s hodnotou BOOL.
+    unsafe {
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWINDOWATTRIBUTE(13),
+            &v as *const i32 as *const _,
+            4,
+        );
+    }
+}
+
 pub fn set_glass(hwnd: HWND, on: bool) -> bool {
     use windows::Win32::Graphics::Dwm::{
         DwmEnableBlurBehindWindow, DWM_BB_BLURREGION, DWM_BB_ENABLE, DWM_BLURBEHIND,
@@ -384,6 +398,15 @@ pub fn set_glass(hwnd: HWND, on: bool) -> bool {
     use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject};
     // SAFETY: platne okno; oblast sa po volani uvolni (DWM si ju skopiruje).
     unsafe {
+        // Windows 11 kresli okolo okna tenky svetly ramik podla jeho tvaru; pocas vysuvania (orezana oblast okna) je
+        // ho vidiet ako bielu ciaru na spodnom okraji. Okraj skla kresli sklo samo.
+        let none: u32 = windows::Win32::Graphics::Dwm::DWMWA_COLOR_NONE;
+        let _ = windows::Win32::Graphics::Dwm::DwmSetWindowAttribute(
+            hwnd,
+            windows::Win32::Graphics::Dwm::DWMWA_BORDER_COLOR,
+            &none as *const u32 as *const _,
+            4,
+        );
         let rgn = CreateRectRgn(0, 0, -1, -1);
         let bb = DWM_BLURBEHIND {
             dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,

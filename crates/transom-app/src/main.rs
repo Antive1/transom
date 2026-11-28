@@ -109,6 +109,31 @@ static LOG: Mutex<Option<(std::fs::File, Instant)>> = Mutex::new(None);
 /// Pocet dokoncenych kreslení listy (prvy prechod; len na diagnostiku/meranie, zapisuje sa do logu pri ukonceni).
 static PAINTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// Mys nad posuvnikom panelu: stlacenie v jeho pase ho chyti, pohyb taha, uvolnenie pusti (odchod mysi tahanie len
+/// ukonci). `Some(prekreslit)` = udalost patri posuvniku, inak obsahu.
+pub(crate) fn scroll_ptr(
+    sb: &mut transom_render::design::ScrollBar,
+    kind: transom_platform::appbar::PointerKind,
+    (x, y): (i32, i32),
+    scroll: &mut i32,
+    max: i32,
+    glide: &mut transom_render::design::Glide,
+) -> Option<bool> {
+    use transom_platform::appbar::PointerKind as K;
+    use transom_render::design::ScrollEv;
+    let ev = match kind {
+        K::Down => ScrollEv::Down,
+        K::Move => ScrollEv::Move,
+        K::Click => ScrollEv::Up,
+        K::Leave => {
+            sb.grab = None;
+            return None;
+        }
+        _ => return None,
+    };
+    sb.pointer(ev, x, y, scroll, max, glide)
+}
+
 fn log(msg: &str) {
     if let Ok(mut g) = LOG.lock() {
         if let Some((f, t0)) = g.as_mut() {
@@ -524,6 +549,8 @@ struct App {
     /// Povolene spustenie sluzby (`false` v testoch a pri automatizacii).
     audio_allowed: bool,
     audio_panel: audio_pop::AudioPanel,
+    /// Vystup stlmil transom pri hlasitosti 0 % (zvysenie hlasitosti stlmenie zrusi).
+    audio_auto_muted: bool,
     /// Sluzba baterii periferii (citanie HID a vlastnosti Bluetooth na vlastnom vlakne); bezi len ked je polozka
     /// `peripherals` viditelna, je zapnuty aspon jeden zdroj a nejde o automatizovany beh. Druhy prvok = konfiguracia,
     /// s ktorou bezi (zmena zdrojov alebo intervalu ju spusti znova).
@@ -681,6 +708,7 @@ impl App {
             extras_started: false,
             audio_allowed: false,
             audio_panel: audio_pop::AudioPanel::default(),
+            audio_auto_muted: false,
             periph: None,
             periph_allowed: false,
             periph_panel: periph_pop::PeriphPanel::default(),
@@ -773,11 +801,13 @@ impl App {
             bu.claude_local,
             bu.claude_statusline,
             bu.codex_local,
+            bu.grok_local,
             bu.archive.clone(),
         ) != (
             au.claude_local,
             au.claude_statusline,
             au.codex_local,
+            au.grok_local,
             au.archive.clone(),
         );
         if sources_changed {
@@ -2329,9 +2359,14 @@ impl App {
         }
         if let Some(rt) = &self.launcher {
             self.launcher_panel.files_pending = rt.files.is_some();
+            if let Some(i) = &rt.index {
+                i.refresh_if_stale();
+            }
             if let Some(f) = &rt.files {
+                // s vlastnym indexom subory najde aj bez Windows Search: upozornenie len ak je prazdny
+                let own = rt.index.as_ref().is_some_and(|i| !i.snapshot().is_empty());
                 self.launcher_panel.index_down =
-                    f.index_state() == transom_launcher::sources::IndexState::Unavailable;
+                    !own && f.index_state() == transom_launcher::sources::IndexState::Unavailable;
             }
             // prazdny dotaz ukaze akcie a nastavenia (ziadne subory)
             let g = rt.engine.query("");
@@ -2590,7 +2625,6 @@ impl App {
 
     fn paint_audio(&mut self, p: &mut dyn transom_render::Painter) {
         let snap = self.audio_snapshot();
-        let quick = self.config.audio_panel.quick_actions.clone();
         let mix = self.mixer.as_ref().map(|m| m.snapshot());
         self.audio_panel.bt = self.bt.as_ref().map(|b| b.snapshot());
         self.audio_panel.profiles = self
@@ -2608,7 +2642,7 @@ impl App {
         let icons: Option<&dyn icon_rt::IconSource> =
             self.icons.as_deref().map(|i| i as &dyn icon_rt::IconSource);
         self.audio_panel
-            .paint_with(p, &self.theme, &snap, &quick, mix, icons);
+            .paint_with(p, &self.theme, &snap, mix, icons);
         let (entries, extras, focus, name) = self.audio_panel.a11y();
         popup::set_panel_accessibility(entries, focus);
         transom_platform::menu_access::set_panel_extras(name, extras);
@@ -2624,16 +2658,35 @@ impl App {
         match cmd {
             C::SetVolume(v) => {
                 if let Some(s) = &self.audio {
+                    // 0 % je najnizsia uroven zariadenia (napr. -42 dB), nie ticho: na 0 sa vystup aj stlmi; zvysenie
+                    // z 0 stlmenie zrusi (stlmenie pri inej hlasitosti, zapnute rucne, ostava)
+                    let now = s.snapshot().volume;
                     s.set_volume(v);
+                    if v == 0 {
+                        if !self.audio_auto_muted && now.is_some_and(|n| !n.muted) {
+                            s.set_mute(true);
+                            self.audio_auto_muted = true;
+                        }
+                    } else if self.audio_auto_muted
+                        || now.is_some_and(|n| n.muted && n.percent == 0)
+                    {
+                        s.set_mute(false);
+                        self.audio_auto_muted = false;
+                    }
                 }
             }
             C::SetMute(m) => {
+                // rucne stlmenie / zrusenie: uz nie je "nase" stlmenie pri 0 %
+                self.audio_auto_muted = false;
                 if let Some(s) = &self.audio {
                     s.set_mute(m);
                 }
             }
-            C::Picker => {
-                self.audio_shortcut(Shortcut::OutputPicker, t("audio.picker"), "Win+Ctrl+V")
+            C::SetDefault(key) => {
+                if let Some(s) = &self.audio {
+                    log("zvuk: predvoleny vystup -> zariadenie");
+                    s.set_default(key);
+                }
             }
             C::SoundSettings => {
                 popup::request(Request::Launch {
@@ -2693,47 +2746,8 @@ impl App {
                 });
                 self.audio_requested(t("mix.apps_settings"), snd::Outcome::Done);
             }
-            C::Quick(id) => match id {
-                "quick_settings" => {
-                    self.audio_shortcut(Shortcut::QuickSettings, t("qa.quick_settings"), "Win+A")
-                }
-                "notifications" => {
-                    self.audio_shortcut(Shortcut::Notifications, t("qa.notifications"), "Win+N")
-                }
-                "search" => {
-                    let o = self.act(Action::Search, None);
-                    self.audio_requested(t("qa.search"), o);
-                }
-                "tray" => {
-                    let o = self.act(Action::Tray, None);
-                    self.audio_requested(t("qa.tray"), o);
-                }
-                "settings" => {
-                    self.launch_settings(None);
-                    self.audio_requested(t("qa.settings"), snd::Outcome::Done);
-                }
-                _ => {}
-            },
         }
         popup::invalidate_popover();
-    }
-
-    /// Odoslanie klavesovej skratky Windows: pri blokovani (zvyseny proces, drzane modifikatory) sa oznami chyba,
-    /// inak len "poziadane" (otvorenie Windows nevieme potvrdit).
-    fn audio_shortcut(&mut self, s: Shortcut, what: String, keys: &str) {
-        match input::send_shortcut(s) {
-            Ok(before) => {
-                log(&format!(
-                    "zvuk: skratka {keys} odoslana, popredie pred: {before:?}"
-                ));
-                self.audio_requested(what, snd::Outcome::Done);
-            }
-            Err(b) => {
-                let text = blocked_text(b, &what, keys);
-                self.show_notice(text.clone());
-                self.audio_panel.msg = Some(text);
-            }
-        }
     }
 
     fn audio_requested(&mut self, what: String, outcome: snd::Outcome) {
@@ -4132,6 +4146,19 @@ impl App {
             return;
         }
         if kind == POP_AI {
+            if let Some(r) = scroll_ptr(
+                &mut self.ai.sbar,
+                pointer,
+                (x, y),
+                &mut self.ai.scroll,
+                self.ai.max_scroll,
+                &mut self.ai.glide,
+            ) {
+                if r {
+                    popup::invalidate_popover();
+                }
+                return;
+            }
             let h = if pointer == PointerKind::Leave {
                 None
             } else {

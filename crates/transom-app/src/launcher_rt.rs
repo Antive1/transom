@@ -23,6 +23,8 @@ pub struct Rt {
     pub engine: Engine,
     pub lists: Lists,
     pub files: Option<Arc<FilesSource>>,
+    /// Vlastny index nazvov suborov (okamzite vysledky; Windows Search doplni zvysok).
+    pub index: Option<Arc<transom_launcher::index::IndexSource>>,
     pub cfg: transom_config::LauncherCfg,
     apps_loaded: Arc<dyn Fn() + Send + Sync>,
 }
@@ -231,6 +233,21 @@ pub fn build(
     if cfg.shelf {
         sources.push(lists.shelf.clone());
     }
+    // vlastny index nazvov: rychly zdroj (vysledky hned pri pisani), ulozeny lokalne pre rychly start
+    let index = cfg.files.then(|| {
+        transom_launcher::index::IndexSource::start(
+            cfg.excluded_folders.clone(),
+            cfg.max_results as usize * 2,
+            Some(
+                transom_tools::tools_dir()
+                    .join("launcher")
+                    .join("files.idx"),
+            ),
+        )
+    });
+    if let Some(i) = &index {
+        sources.push(i.clone());
+    }
     let files = cfg.files.then(|| {
         Arc::new(FilesSource::new(
             Arc::new(WinSearch),
@@ -276,6 +293,7 @@ pub fn build(
         engine,
         lists,
         files,
+        index,
         cfg: cfg.clone(),
         apps_loaded: apps_cb,
     }

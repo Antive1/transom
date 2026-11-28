@@ -16,7 +16,7 @@ pub(crate) const CLIENT_W_LP: i32 = 824;
 /// Klientska oblast po odstraneni systemovej hlavicky: vyska okna (720) bez dolneho ramu (8).
 pub(crate) const CLIENT_H_LP: i32 = 712;
 
-pub(crate) const PAGES: [(Page, &str); 21] = [
+pub(crate) const PAGES: [(Page, &str); 20] = [
     (Page::Layout, "layout"),
     (Page::Displays, "displays"),
     (Page::Media, "media"),
@@ -24,7 +24,6 @@ pub(crate) const PAGES: [(Page, &str); 21] = [
     (Page::Clock, "clock"),
     (Page::Ai, "ai"),
     (Page::Sound, "sound"),
-    (Page::Audio, "audio"),
     (Page::Peripherals, "peripherals"),
     (Page::Tools, "tools"),
     (Page::Extras, "extras"),
@@ -107,6 +106,10 @@ pub(crate) fn run(args: &[String], mut ui: Ui) -> i32 {
             }
             if pg == Page::Appearance {
                 pages.push((pg, "appearance-oled", false));
+                pages.push((pg, "appearance-mon", false));
+            }
+            if pg == Page::Layout {
+                pages.push((pg, "layout-mon", false));
             }
             if pg == Page::Sound {
                 pages.push((pg, "sound-on", false));
@@ -227,6 +230,14 @@ pub(crate) fn run(args: &[String], mut ui: Ui) -> i32 {
                     };
                     // pocasie: vysledky hladania (dlhe nazvy), ulozene miesta, zamietnuta poloha, plny zoznam
                     crate::weather_page::fixture(&mut ui, name == "extras-weather");
+                    // vybrany druhy monitor s vlastnymi nastaveniami (rozlozenie alebo vzhlad podla stranky)
+                    ui.set_scope(None);
+                    ui.cfg.monitors.clear();
+                    if name.ends_with("-mon") {
+                        ui.set_scope(Some("B".into()));
+                        let part = ui.scope_part();
+                        ui.set_own(part, true);
+                    }
                     ui.scroll = 0;
                     ui.max_scroll = 0;
                     ui.status =

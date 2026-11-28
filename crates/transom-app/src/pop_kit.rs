@@ -151,6 +151,8 @@ type Node = (Rect, String, PageExtra, bool, Option<Hit>);
 pub struct Kit {
     /// Plynule posuvanie (snimka: `glide_step`).
     pub glide: transom_render::design::Glide,
+    /// Posuvnik, ktory sa da chytit a tahat mysou.
+    sbar: transom_render::design::ScrollBar,
 
     hover: Option<Hit>,
     focus: Option<Hit>,
@@ -839,7 +841,7 @@ impl Kit {
             self.repaint = true;
         }
         // posuvnik: len ked sa obsah da posuvat
-        transom_render::design::scroll_thumb(
+        self.sbar.paint(
             p,
             th,
             Rect::new(0, 0, sz.w, sz.h),
@@ -921,6 +923,16 @@ impl Kit {
     }
 
     pub fn pointer(&mut self, kind: PointerKind, x: i32, y: i32) -> (Option<Cmd>, bool) {
+        if let Some(r) = crate::scroll_ptr(
+            &mut self.sbar,
+            kind,
+            (x, y),
+            &mut self.scroll,
+            self.max_scroll,
+            &mut self.glide,
+        ) {
+            return (None, r);
+        }
         let h = if kind == PointerKind::Leave {
             None
         } else {

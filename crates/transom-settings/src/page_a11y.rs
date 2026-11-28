@@ -84,18 +84,16 @@ pub(crate) fn role_of(h: &Hit) -> i32 {
         | Hit::ThemeColor
         | Hit::Swatch(_)
         | Hit::DispMode(_)
+        | Hit::Scope(_)
         | Hit::DateProvider(_)
         | Hit::DateKind(_)
         | Hit::DateRepeat(_)
         | Hit::WeatherUse(_)
         | Hit::WeatherDevice => ROLE_RADIOBUTTON,
         Hit::OpacityTrack | Hit::SoundTrack => ROLE_SLIDER,
-        Hit::SoundToggle
-        | Hit::AudioQuick(_)
-        | Hit::ToolsToggle(_)
-        | Hit::ExSound
-        | Hit::ExSys(_)
-        | Hit::ExMicShow => ROLE_CHECKBUTTON,
+        Hit::SoundToggle | Hit::ToolsToggle(_) | Hit::ExSound | Hit::ExSys(_) | Hit::ExMicShow => {
+            ROLE_CHECKBUTTON
+        }
         Hit::TransferSection(_) => ROLE_CHECKBUTTON,
         Hit::ToolsCycle(_)
         | Hit::ToolsClear(_)
@@ -140,6 +138,7 @@ pub(crate) fn role_of(h: &Hit) -> i32 {
         | Hit::ResetAppearance
         | Hit::DispRemove(_)
         | Hit::DispIdentify
+        | Hit::ScopeOwn(_)
         | Hit::DateEvery(_)
         | Hit::DateAdd
         | Hit::DateCancel

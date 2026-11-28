@@ -897,6 +897,7 @@ impl BarHost {
         HANDLER.with(|c| *c.borrow_mut() = Some(handler));
         // OLE (cieľ pustenia suborov, tahanie von) bezi na tomto vlakne; zlyhanie len vypne pustenie
         crate::dragdrop::init();
+        watch_window_moves();
         // SAFETY: registracia triedy a vytvorenie riadiaceho okna na vlakne UI; retazce ziju pocas volani.
         let ctl = unsafe {
             let wide: Vec<u16> = "TaskbarCreated\0".encode_utf16().collect();
@@ -1263,6 +1264,65 @@ pub(crate) fn reveal(monitor_id: &str) {
     .flatten();
     if let Some(raw) = raw {
         show_on_top(hw(raw));
+    }
+}
+
+const EVENT_SYSTEM_MOVESIZESTART: u32 = 0x000A;
+const EVENT_SYSTEM_MOVESIZEEND: u32 = 0x000B;
+
+/// Presuvanie okna mysou (v lubovolnej aplikacii): lista na ten cas ustupi spomedzi okien "vzdy navrchu", aby
+/// rozlozenia prichytenia Windows 11 (Snap Layouts hore na obrazovke) boli nad nou a dalo sa na ne dostat. Po pusteni
+/// okna sa vrati navrch. Necitaju sa ziadne data okna.
+fn watch_window_moves() {
+    use windows::Win32::UI::Accessibility::SetWinEventHook;
+    use windows::Win32::UI::WindowsAndMessaging::{WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS};
+    // SAFETY: hacik bez DLL (mimo kontextu) na tomto vlakne; zanikne s procesom.
+    unsafe {
+        let _ = SetWinEventHook(
+            EVENT_SYSTEM_MOVESIZESTART,
+            EVENT_SYSTEM_MOVESIZEEND,
+            None,
+            Some(move_event),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        );
+    }
+}
+
+unsafe extern "system" fn move_event(
+    _h: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+    event: u32,
+    _hwnd: HWND,
+    _obj: i32,
+    _child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    let start = event == EVENT_SYSTEM_MOVESIZESTART;
+    if !start && event != EVENT_SYSTEM_MOVESIZEEND {
+        return;
+    }
+    // listy, ktore su prave zobrazene (nie skryte pre aplikaciu na celu obrazovku)
+    let bars: Vec<isize> =
+        st(|s| s.bars.iter().filter(|b| !b.fs).map(|b| b.hwnd).collect()).unwrap_or_default();
+    for h in bars {
+        // SAFETY: okno listy je nase; len poradie, bez presunu a aktivacie.
+        unsafe {
+            let _ = SetWindowPos(
+                HWND(h as *mut _),
+                Some(if start {
+                    windows::Win32::UI::WindowsAndMessaging::HWND_NOTOPMOST
+                } else {
+                    HWND_TOPMOST
+                }),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
     }
 }
 

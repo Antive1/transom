@@ -2,30 +2,54 @@
 //! `IMMDeviceEnumerator` (zoznam, predvoleny vystup), `IMMNotificationClient` (zmeny zariadeni),
 //! `IAudioEndpointVolume` + `IAudioEndpointVolumeCallback` (hlasitost a stlmenie predvoleneho vystupu).
 //!
+//! Zmena predvoleneho vystupu: Windows na to nema dokumentovane API. Pouziva sa nedokumentovane `IPolicyConfig`
+//! (to iste ako EarTrumpet a SoundSwitch), len na vyslovnu volbu pouzivatela v paneli; ak ho nejde ziskat, volba vrati
+//! `Unsupported`.
+//!
 //! Pravidla (z dokumentacie Microsoftu): callbacky su neblokujuce a len vlozia udalost do fronty; registracie sa
 //! rusia **mimo** callbackov na vlakne sluzby pred uvolnenim rozhrani; COM je MTA na vlastnom vlakne. Predvoleny
-//! vystup sa **nikdy nemeni** (nepouziva sa ziadne nedokumentovane rozhranie); hlasitost sa zapisuje len na predvolene
+//! vystup sa meni len na vyslovnu volbu pouzivatela (pozri vyssie); hlasitost sa zapisuje len na predvolene
 //! zariadenie a s vlastnym kontextom (`OWN_CONTEXT`), aby sa dala rozpoznat ozvena. Chyby sa vracaju ako hodnoty
 //! (vydanie ma `panic = "abort"`), ID zariadenia sa nelogue ani nezobrazuje.
 use crate::model::{percent_of, scalar_of, AudioError, Controls, DeviceState, RawDevice, Volume};
 use crate::service::{Backend, Event, Refresh};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use windows::core::{implement, GUID, PCWSTR};
+use windows::core::{implement, interface, IUnknown, IUnknown_Vtbl, GUID, HRESULT, PCWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::PROPERTYKEY;
 use windows::Win32::Media::Audio::Endpoints::{
     IAudioEndpointVolume, IAudioEndpointVolumeCallback, IAudioEndpointVolumeCallback_Impl,
 };
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, IMMNotificationClient,
-    IMMNotificationClient_Impl, MMDeviceEnumerator, AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE,
-    DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED, DEVICE_STATE_UNPLUGGED,
+    eConsole, eMultimedia, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator,
+    IMMNotificationClient, IMMNotificationClient_Impl, MMDeviceEnumerator,
+    AUDIO_VOLUME_NOTIFICATION_DATA, DEVICE_STATE, DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
+    DEVICE_STATE_UNPLUGGED,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
     COINIT_MULTITHREADED, STGM_READ,
 };
+
+/// `IPolicyConfig` (Windows 7 az 11): 10 metod pred `SetDefaultEndpoint` sa nevolaju.
+#[interface("f8679f50-850a-41cf-9c72-430f290290c8")]
+unsafe trait IPolicyConfig: IUnknown {
+    fn get_mix_format(&self) -> HRESULT;
+    fn get_device_format(&self) -> HRESULT;
+    fn reset_device_format(&self) -> HRESULT;
+    fn set_device_format(&self) -> HRESULT;
+    fn get_processing_period(&self) -> HRESULT;
+    fn set_processing_period(&self) -> HRESULT;
+    fn get_share_mode(&self) -> HRESULT;
+    fn set_share_mode(&self) -> HRESULT;
+    fn get_property_value(&self) -> HRESULT;
+    fn set_property_value(&self) -> HRESULT;
+    fn set_default_endpoint(&self, id: PCWSTR, role: ERole) -> HRESULT;
+}
+
+/// `CPolicyConfigClient`.
+const POLICY_CONFIG_CLIENT: GUID = GUID::from_u128(0x870af99c_171d_4f9e_af0d_e63df40c2bc9);
 
 /// Kontext udalosti nasich zapisov (ozvena sa v `OnNotify` rozpozna podla neho).
 pub const OWN_CONTEXT: GUID = GUID::from_u128(0x5b0c2a7e_91d4_4f63_8a1e_3c7d2f9b6e04);
@@ -371,6 +395,22 @@ impl Backend for CoreAudioBackend {
                     other => other,
                 })
         }
+    }
+
+    fn set_default(&mut self, id: &str) -> Result<(), AudioError> {
+        let wide: Vec<u16> = id.encode_utf16().chain(Some(0)).collect();
+        // SAFETY: COM je inicializovane na vlakne sluzby; `wide` zije pocas volani; vtable podla overeneho poradia.
+        unsafe {
+            let pc: IPolicyConfig = CoCreateInstance(&POLICY_CONFIG_CLIENT, None, CLSCTX_ALL)
+                .map_err(|_| AudioError::Unsupported)?;
+            // ako nastavenia Windows: predvoleny vystup pre hry/system aj pre multimedia
+            for role in [eConsole, eMultimedia] {
+                pc.set_default_endpoint(PCWSTR(wide.as_ptr()), role)
+                    .ok()
+                    .map_err(|e| classify(&e))?;
+            }
+        }
+        Ok(())
     }
 
     fn shutdown(&mut self) {

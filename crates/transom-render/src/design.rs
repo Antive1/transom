@@ -525,32 +525,184 @@ pub fn checkbox(p: &mut dyn Painter, th: &Theme, r: Rect, on: bool, hover: bool,
 /// Ukazovatel posuvania ako v iOS: tenky zaobleny palec pri pravom okraji `view` (bez drahy). Kresli sa len ked
 /// sa obsah da posuvat (`max_scroll > 0`); velkost palca = podiel viditelnej casti, poloha = `scroll`.
 pub fn scroll_thumb(p: &mut dyn Painter, th: &Theme, view: Rect, scroll: i32, max_scroll: i32) {
+    scroll_thumb_grabbed(p, th, view, scroll, max_scroll, false);
+}
+
+/// Ako [`scroll_thumb`]; `grabbed` = palec drzany mysou (sirsi a vyraznejsi).
+pub fn scroll_thumb_grabbed(
+    p: &mut dyn Painter,
+    th: &Theme,
+    view: Rect,
+    scroll: i32,
+    max_scroll: i32,
+    grabbed: bool,
+) {
+    let s = p.scale();
+    let Some((track, len, off)) = scroll_track(s, view, max_scroll, scroll) else {
+        return;
+    };
+    let w = if grabbed {
+        (6.0 * s).round().max(3.0) as i32
+    } else {
+        (4.0 * s).round().max(2.0) as i32
+    };
+    let inset = (3.0 * s).round() as i32;
+    p.fill_round_rect(
+        Rect::new(view.x + view.w - w - inset, track.y + off, w, len),
+        w / 2,
+        if grabbed { th.foreground } else { th.muted },
+    );
+}
+
+/// Draha palca posuvnika: (draha, dlzka palca, posun palca). `None` = obsah sa neposuva.
+fn scroll_track(scale: f32, view: Rect, max_scroll: i32, scroll: i32) -> Option<(Rect, i32, i32)> {
     if max_scroll <= 0 || view.h <= 0 {
-        return;
+        return None;
     }
-    let w = px(p, 4).max(2);
-    let inset = px(p, 3);
+    let px = |v: f32| (v * scale).round() as i32;
+    let inset = px(3.0);
     let track = view.h - 2 * inset;
-    if track <= w {
-        return;
+    if track <= px(4.0).max(2) {
+        return None;
     }
     let content = view.h as i64 + max_scroll as i64;
     let len = ((track as i64 * view.h as i64 / content) as i32)
-        .max(px(p, 24))
+        .max(px(24.0))
         .min(track);
     let off =
         ((track - len) as i64 * scroll.clamp(0, max_scroll) as i64 / max_scroll as i64) as i32;
-    p.fill_round_rect(
-        Rect::new(view.x + view.w - w - inset, view.y + inset + off, w, len),
-        w / 2,
-        th.muted,
-    );
+    Some((Rect::new(view.x, view.y + inset, view.w, track), len, off))
+}
+
+/// Chytenie posuvnika mysou: kde v palci sa drzi (px od vrchu palca).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollGrab {
+    pub off: i32,
+}
+
+/// Sirka pasu pri pravom okraji, za ktory sa posuvnik chyta (lp).
+pub const SCROLL_GRAB_LP: f32 = 12.0;
+
+/// Stlacenie mysi v bode (`x`, `y`): ak je v pase posuvnika (a obsah sa posuva), chyti ho. Klik na palec ho drzi tam,
+/// kde sa chytil; klik vedla palca ho presunie stredom pod mys. Vrati chytenie a novy posun.
+pub fn scroll_grab(
+    scale: f32,
+    view: Rect,
+    scroll: i32,
+    max_scroll: i32,
+    x: i32,
+    y: i32,
+) -> Option<(ScrollGrab, i32)> {
+    let (track, len, off) = scroll_track(scale, view, max_scroll, scroll)?;
+    let strip = (SCROLL_GRAB_LP * scale).round() as i32;
+    if x < view.x + view.w - strip || x >= view.x + view.w || y < view.y || y >= view.y + view.h {
+        return None;
+    }
+    let top = track.y + off;
+    if y >= top && y < top + len {
+        return Some((ScrollGrab { off: y - top }, scroll));
+    }
+    let g = ScrollGrab { off: len / 2 };
+    Some((g, scroll_drag(scale, view, max_scroll, g, y)))
+}
+
+/// Udalost mysi pre [`ScrollBar`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollEv {
+    Down,
+    Move,
+    Up,
+}
+
+/// Posuvnik okna, ktory sa da chytit a tahat mysou: oblast a mierka z posledneho kreslenia a chytenie.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScrollBar {
+    pub view: Rect,
+    pub scale: f32,
+    pub grab: Option<ScrollGrab>,
+}
+
+impl ScrollBar {
+    /// Nakresli posuvnik (pri kresleni okna) a zapamata si jeho oblast pre mys.
+    pub fn paint(&mut self, p: &mut dyn Painter, th: &Theme, view: Rect, scroll: i32, max: i32) {
+        self.view = view;
+        self.scale = p.scale();
+        if max <= 0 {
+            self.grab = None;
+        }
+        scroll_thumb_grabbed(p, th, view, scroll, max, self.grab.is_some());
+    }
+
+    /// Mys: `Some(prekreslit)`, ak udalost patri posuvniku (stlacenie v jeho pase, tahanie, uvolnenie po tahani);
+    /// `None` = patri obsahu.
+    pub fn pointer(
+        &mut self,
+        ev: ScrollEv,
+        x: i32,
+        y: i32,
+        scroll: &mut i32,
+        max: i32,
+        glide: &mut Glide,
+    ) -> Option<bool> {
+        match ev {
+            ScrollEv::Down => {
+                let (g, s) = scroll_grab(self.scale, self.view, *scroll, max, x, y)?;
+                glide.stop();
+                self.grab = Some(g);
+                *scroll = s;
+                Some(true)
+            }
+            ScrollEv::Move => {
+                let g = self.grab?;
+                let s = scroll_drag(self.scale, self.view, max, g, y);
+                let changed = s != *scroll;
+                *scroll = s;
+                Some(changed)
+            }
+            ScrollEv::Up => self.grab.take().map(|_| true),
+        }
+    }
+
+    pub fn dragging(&self) -> bool {
+        self.grab.is_some()
+    }
+}
+
+/// Tahanie chyteneho posuvnika: posun obsahu pre polohu mysi `y`.
+pub fn scroll_drag(scale: f32, view: Rect, max_scroll: i32, g: ScrollGrab, y: i32) -> i32 {
+    let Some((track, len, _)) = scroll_track(scale, view, max_scroll, 0) else {
+        return 0;
+    };
+    let room = (track.h - len).max(1);
+    let pos = (y - g.off - track.y).clamp(0, room);
+    ((pos as i64 * max_scroll as i64 + room as i64 / 2) / room as i64) as i32
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::audit::ratio;
+
+    #[test]
+    fn scrollbar_grab_follows_the_mouse_and_reaches_both_ends() {
+        let view = Rect::new(0, 0, 300, 400);
+        let max = 1200;
+        // mimo pasu pri pravom okraji sa nechyta
+        assert!(scroll_grab(1.0, view, 0, max, 200, 50).is_none());
+        // bez posuvania sa nechyta
+        assert!(scroll_grab(1.0, view, 0, 0, 295, 50).is_none());
+        // chytenie palca hore: posun sa nemeni, tahanie dole az na koniec
+        let (g, s) = scroll_grab(1.0, view, 0, max, 295, 10).expect("palec");
+        assert_eq!(s, 0);
+        assert_eq!(scroll_drag(1.0, view, max, g, 10), 0);
+        assert_eq!(scroll_drag(1.0, view, max, g, 2000), max);
+        assert_eq!(scroll_drag(1.0, view, max, g, -50), 0);
+        let mid = scroll_drag(1.0, view, max, g, 200);
+        assert!(mid > max / 3 && mid < max * 2 / 3, "{mid}");
+        // klik pod palec ho presunie pod mys
+        let (_, s) = scroll_grab(1.0, view, 0, max, 295, 390).expect("draha");
+        assert!(s > max * 9 / 10, "{s}");
+    }
 
     fn states() -> Vec<(&'static str, State)> {
         let mut v = vec![("rest", State::default())];
@@ -737,6 +889,12 @@ impl Glide {
         }
         self.target = Some(t);
         true
+    }
+
+    /// Zastavi rozbehnute posuvanie (napr. ked sa chyti posuvnik mysou).
+    pub fn stop(&mut self) {
+        self.target = None;
+        self.last = None;
     }
 
     /// Snimka: posunie `cur` k cielu; `false` = hotovo (alebo nic nebezi).

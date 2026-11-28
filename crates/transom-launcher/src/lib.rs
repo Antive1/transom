@@ -3,6 +3,7 @@
 //! Search cez trait `FileSearch`). Nic sa nespusta, kym pouzivatel nevyberie vysledok (spustenie robi volajuci z `Target`).
 //! Dotaz sa **nikdy** nevklada do prikazoveho riadka ani do skriptu; do SQL idu len escapovane znaky (`sql_like_term`).
 pub mod engine;
+pub mod index;
 pub mod rank;
 pub mod sources;
 

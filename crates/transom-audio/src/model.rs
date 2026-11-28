@@ -26,6 +26,8 @@ pub struct RawDevice {
 pub struct Device {
     /// Ocisteny nazov (moze byt prazdny: UI ukaze "Zariadenie bez nazvu").
     pub name: String,
+    /// Stabilny kluc zariadenia (odtlacok ID, nie ID samotne) na volbu predvoleneho vystupu.
+    pub key: u64,
     pub state: DeviceState,
     pub is_default: bool,
 }
@@ -147,6 +149,14 @@ pub fn clean_name(raw: &str) -> String {
     }
 }
 
+/// Odtlacok ID zariadenia (ID sa do snimky nedostane).
+pub fn key_of(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut h);
+    h.finish()
+}
+
 /// Zariadenia na zobrazenie: ocistene nazvy, rovnake nazvy sa rozlisia "(2)", "(3)" (len v zobrazeni), predvolene
 /// zariadenie prve a potom aktivne pred neaktivnymi (stabilne podla povodneho poradia).
 pub fn display_devices(raw: &[RawDevice]) -> Vec<Device> {
@@ -167,6 +177,7 @@ pub fn display_devices(raw: &[RawDevice]) -> Vec<Device> {
         };
         out.push(Device {
             name,
+            key: key_of(&d.id),
             state: d.state,
             is_default: d.is_default,
         });

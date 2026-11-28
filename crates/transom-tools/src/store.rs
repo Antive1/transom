@@ -83,7 +83,13 @@ fn check(v: Value, format: &str, current: u64) -> Result<Value, Unusable> {
     let Some(o) = v.as_object() else {
         return Err(Unusable::Corrupt);
     };
-    if o.get("format").and_then(Value::as_str) != Some(format) {
+    // indexy z casov pred premenovanim (lintel -> transom) maju format "lintel-tools-*": ten isty obsah, pri dalsom
+    // ulozeni sa zapise novy nazov formatu
+    let legacy = format
+        .strip_prefix("transom-")
+        .map(|r| format!("lintel-{r}"));
+    let got = o.get("format").and_then(Value::as_str);
+    if got != Some(format) && (legacy.is_none() || got != legacy.as_deref()) {
         return Err(Unusable::Corrupt);
     }
     let ver = o
@@ -218,6 +224,20 @@ pub(crate) fn temp_dir(name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_index_from_before_the_rename_is_still_readable() {
+        let v: Value =
+            serde_json::from_str(r#"{"format":"lintel-tools-shelf","version":1,"items":[]}"#)
+                .unwrap();
+        assert!(check(v, "transom-tools-shelf", 1).is_ok());
+        let other: Value =
+            serde_json::from_str(r#"{"format":"lintel-tools-notes","version":1}"#).unwrap();
+        assert!(matches!(
+            check(other, "transom-tools-shelf", 1),
+            Err(Unusable::Corrupt)
+        ));
+    }
 
     fn payload(n: u64) -> Map<String, Value> {
         let mut m = Map::new();

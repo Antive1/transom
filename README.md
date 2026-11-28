@@ -75,7 +75,7 @@ glass too, or follow the Windows theme or your own colour.
 </table>
 
 - 🕒 **Clock and calendar** – date, calendar popover, events from your own private ICS link (Google, Outlook).
-- 🔍 **Search** – a fast, keyboard-first launcher (**Alt+Space**): apps, files from the Windows index, Settings pages, notes.
+- 🔍 **Search** – a fast, keyboard-first launcher (**Alt+Space**): apps, files (its own instant file-name index plus the Windows index), Settings pages, notes.
 - 🔊 **Audio** – output device, system volume, per-app mixer, sound profiles, Bluetooth audio connect.
 - 🎨 **Colours** – an eyedropper with a magnifier for any pixel on the screen, HEX / RGB / HSL and a colour history.
 - 🔋 **Batteries** – green while charging, red when low – laptop battery plus wireless mice, keyboards, headsets and controllers (Bluetooth, Razer, Logitech, NuPhy,

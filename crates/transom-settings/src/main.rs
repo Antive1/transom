@@ -10,7 +10,6 @@ mod a11y_tests;
 mod appearance_page;
 #[cfg(test)]
 mod archive_tests;
-mod audio_page;
 mod cc;
 mod chrome;
 mod displays_page;
@@ -27,6 +26,7 @@ mod nav_tests;
 mod notch_page;
 mod page_a11y;
 mod periph_page;
+mod scope_page;
 mod shot;
 mod sound_page;
 #[cfg(test)]
@@ -194,7 +194,6 @@ enum Page {
     Clock,
     Ai,
     Sound,
-    Audio,
     Peripherals,
     Tools,
     Extras,
@@ -229,7 +228,6 @@ const CATS: [Cat; 4] = [
             (Page::Clock, "nav.clock"),
             (Page::Media, "nav.media"),
             (Page::Ai, "nav.ai"),
-            (Page::Audio, "nav.audio"),
             (Page::Peripherals, "nav.peripherals"),
             (Page::Extras, "nav.extras"),
         ],
@@ -333,8 +331,6 @@ enum Hit {
     SoundTrack,
     SoundStep(i32),
     SoundPreview,
-    /// Rychla akcia panela Zvuk (zapnut / vypnut v paneli).
-    AudioQuick(&'static str),
     /// Baterie periferii: zdroj (zapnut / vypnut), pocet zariadeni v liste (0 = vsetky), interval v sekundach.
     PeriphCount(u32),
     PeriphInterval(u32),
@@ -372,6 +368,9 @@ enum Hit {
     /// nepripojeneho monitora, identifikacia.
     DispMode(&'static str),
     DispToggle(usize),
+    /// Stranky Layout a Appearance: upravovany monitor (`None` = vsetky) a vlastne nastavenia vybraneho monitora.
+    Scope(Option<String>),
+    ScopeOwn(bool),
     DispRemove(String),
     DispIdentify,
     /// Formular rucnych datumov (kalendar): poskytovatel, druh, opakovanie, interval, pridat/ulozit, zrusit, upravit/odstranit
@@ -575,6 +574,8 @@ struct Ui {
     max_scroll: i32,
     /// Plynule posuvanie kolieskom (snimky s obnovou obrazovky).
     glide: transom_render::design::Glide,
+    /// Posuvnik obsahu, ktory sa da chytit a tahat mysou.
+    sbar: transom_render::design::ScrollBar,
     /// Prave prebieha plynule posuvanie: natívne polia su skryte a stranka kresli ich obraz (bez blikania a smuh).
     gliding: bool,
     /// Okno obsahu (posuvna oblast) z posledneho kreslenia - vstupne polia mimo neho sa skryvaju.
@@ -585,6 +586,10 @@ struct Ui {
     art: Option<Art>,
     /// Pripojene monitory (pre stranku Displays; obnovuje sa pri otvoreni stranky a pri `WM_DISPLAYCHANGE`).
     monitors: Vec<transom_platform::monitor::MonitorInfo>,
+    /// Upravovany monitor na strankach Layout a Appearance (`None` = spolocne nastavenia) a ci je jeho vlastne rozlozenie /
+    /// vzhlad prave vymenene do `cfg` (pozri `scope_page`).
+    scope: Option<String>,
+    swapped: [bool; 2],
     /// Formular rucnych datumov kalendara (stranka AI) a obdlznik jeho natívneho pola s datumom.
     form: DateForm,
     date_rect: Rect,
@@ -968,10 +973,13 @@ impl Ui {
     }
 
     fn save(&mut self) {
+        // na disk ide normalny tvar (vlastne nastavenia monitora spat na jeho miesto)
+        self.unswap();
         // pravidlo stredu plati pre kazdu zmenu (aj zapnutie / vypnutie odlozenych suborov)
         self.cfg.enforce_center();
         if self.read_only {
             self.status = t("status.readonly");
+            self.reswap();
             return;
         }
         match transom_config::save_merged(&transom_config::default_path(), &self.base, &self.cfg) {
@@ -984,6 +992,7 @@ impl Ui {
             }
             Err(e) => self.status = tf("status.save_failed", &[&e.to_string()]),
         }
+        self.reswap();
     }
 
     /// Znova zisti pripojene monitory (otvorenie stranky Displays, zmena zobrazenia).
@@ -1303,6 +1312,7 @@ impl Ui {
         let mut rec = transom_render::record::Recorder::new(p);
         let bottom = {
             let mut tp = transom_render::audit::Track::new(&mut rec);
+            self.check_scope();
             match self.page {
                 Page::Layout => self.paint_layout(&mut tp, x0, origin, w),
                 Page::Displays => self.paint_displays(&mut tp, x0, origin, w),
@@ -1314,7 +1324,6 @@ impl Ui {
                 Page::Clock => self.paint_clock(&mut tp, x0, origin, w),
                 Page::Ai => self.paint_ai(&mut tp, x0, origin, w),
                 Page::Sound => self.paint_sound(&mut tp, x0, origin, w),
-                Page::Audio => self.paint_audio_page(&mut tp, x0, origin, w),
                 Page::Peripherals => self.paint_periph_page(&mut tp, x0, origin, w),
                 Page::Tools | Page::Clipboard | Page::Notes | Page::Shots | Page::Launcher => {
                     self.paint_tools_page(&mut tp, x0, origin, w)
@@ -1384,12 +1393,14 @@ impl Ui {
             }
             self.repaint = true;
         }
-        // jemny posuvnik (indikator polohy; ovlada sa kolieskom a klavesnicou)
-        if self.max_scroll > 0 {
-            let th_h = (vp.h * vp.h / (vp.h + self.max_scroll)).max(px(28));
-            let ty = vp.y + (vp.h - th_h) * self.scroll / self.max_scroll;
-            p.fill_round_rect(Rect::new(sz.w - px(10), ty, px(4), th_h), px(2), th.muted);
-        }
+        // jemny posuvnik (koliesko, klavesnica, alebo chytit a tahat mysou)
+        self.sbar.paint(
+            p,
+            &th,
+            Rect::new(vp.x, vp.y, sz.w - px(3) - vp.x, vp.h),
+            self.scroll,
+            self.max_scroll,
+        );
         // stavovy riadok (pevny)
         p.fill_rect(
             Rect::new(nav_w, sz.h - status_h, sz.w - nav_w, status_h),
@@ -1784,6 +1795,7 @@ impl Ui {
         let mut y = self.title(p, x0, y, w, "layout.title");
         y = self.paragraph(p, x0, y, w, &t("layout.help"), 12.0, th.muted) + px(4);
         y = self.paragraph(p, x0, y, w, &t("layout.kbd_help"), 12.0, th.muted) + px(12);
+        y = self.paint_scope(p, x0, y, w);
         // nahlad: skutocny renderer, zmensena sirka (v karte)
         y = self.card_begin(s, y);
         let bar_h = px(28);
@@ -2446,7 +2458,7 @@ impl Ui {
         y += self.choice_row(p, Rect::new(x0, y, w, 0), lw, &t("arc.retention"), opts);
         // stav: zdroj zapnuty? / pozastavene / zhrnutie suboru
         let u = &self.cfg.usage;
-        if a.enabled && !(u.claude_local || u.codex_local) {
+        if a.enabled && !(u.claude_local || u.codex_local || u.grok_local) {
             y = self.infobar(p, x0, y, w, &t("arc.needsrc"));
         }
         if a.enabled && a.paused {
@@ -2515,7 +2527,7 @@ impl Ui {
         y = self.card_begin(s, y);
         y = self.section(p, x0, y, w, &t("aip.sources_h"));
         let u = self.cfg.usage.clone();
-        let sources: [(u8, bool, &str, String, String); 3] = [
+        let sources: [(u8, bool, &str, String, String); 4] = [
             (
                 0,
                 u.claude_local,
@@ -2536,6 +2548,13 @@ impl Ui {
                 "aip.codex",
                 t("aip.codex.d1"),
                 t("aip.codex.d2"),
+            ),
+            (
+                3,
+                u.grok_local,
+                "aip.grok",
+                t("aip.grok.d1"),
+                t("aip.grok.d2"),
             ),
         ];
         for (i, on, title, d1, d2) in sources {
@@ -3219,10 +3238,6 @@ impl Ui {
                 self.preview_button();
                 changed = false;
             }
-            Hit::AudioQuick(id) => {
-                let on = self.cfg.audio_panel.has(id);
-                self.cfg.audio_panel.set(id, !on);
-            }
             Hit::PeriphCount(n) => self.cfg.peripherals.on_bar = n,
             Hit::ExWork(v) => self.cfg.timer.work_min = v,
             Hit::ExBreak(v) => self.cfg.timer.short_break_min = v,
@@ -3340,6 +3355,7 @@ impl Ui {
                 match i {
                     0 => u.claude_local = !u.claude_local,
                     1 => u.claude_statusline = !u.claude_statusline,
+                    3 => u.grok_local = !u.grok_local,
                     _ => u.codex_local = !u.codex_local,
                 }
             }
@@ -3351,6 +3367,7 @@ impl Ui {
                 u.claude_local = false;
                 u.claude_statusline = false;
                 u.codex_local = false;
+                u.grok_local = false;
             }
             Hit::DateProvider(v) => {
                 self.form.provider = v;
@@ -3486,6 +3503,16 @@ impl Ui {
             Hit::DispIdentify => {
                 changed = false;
                 identify_displays(&self.monitors);
+            }
+            Hit::Scope(id) => {
+                changed = false;
+                self.set_scope(id);
+                self.fill_edits(None);
+            }
+            Hit::ScopeOwn(own) => {
+                let part = self.scope_part();
+                self.set_own(part, own);
+                self.fill_edits(None);
             }
             Hit::CancelDelete => {
                 self.confirm_delete = false;
@@ -4524,7 +4551,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             WM_CAPTURECHANGED => {
                 if lp.0 != hwnd.0 as isize {
-                    with_ui(|ui| ui.chrome.pressed = None);
+                    with_ui(|ui| {
+                        ui.chrome.pressed = None;
+                        ui.sbar.grab = None;
+                    });
                     let _ = InvalidateRect(Some(hwnd), None, false);
                 }
                 LRESULT(0)
@@ -4765,6 +4795,33 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                     let _ = InvalidateRect(Some(hwnd), None, false);
                     return LRESULT(0);
                 }
+                // tahanie posuvnika
+                let dragging = with_ui(|ui| {
+                    if !ui.sbar.dragging() {
+                        return None;
+                    }
+                    let mut s = ui.scroll;
+                    let r = ui.sbar.pointer(
+                        transom_render::design::ScrollEv::Move,
+                        x,
+                        y,
+                        &mut s,
+                        ui.max_scroll,
+                        &mut ui.glide,
+                    );
+                    if r == Some(true) {
+                        ui.scroll = s;
+                        place_edits(ui, hwnd);
+                    }
+                    r
+                })
+                .flatten();
+                if let Some(changed) = dragging {
+                    if changed {
+                        let _ = InvalidateRect(Some(hwnd), None, false);
+                    }
+                    return LRESULT(0);
+                }
                 // mys nad klientskou oblastou: tlacidla hlavicky uz nie su pod mysou
                 if with_ui(|ui| ui.chrome.hover.take().is_some()).unwrap_or(false) {
                     let _ = InvalidateRect(Some(hwnd), None, false);
@@ -4800,11 +4857,35 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
+                let (x, y) = xy(lp);
+                // posuvnik: chytit (klik vedla palca ho presunie pod mys)
+                let grabbed = with_ui(|ui| {
+                    let mut s = ui.scroll;
+                    let r = ui.sbar.pointer(
+                        transom_render::design::ScrollEv::Down,
+                        x,
+                        y,
+                        &mut s,
+                        ui.max_scroll,
+                        &mut ui.glide,
+                    );
+                    if r.is_some() {
+                        ui.scroll = s;
+                        place_edits(ui, hwnd);
+                    }
+                    r.is_some()
+                })
+                .unwrap_or(false);
+                if grabbed {
+                    GLIDE.with(|g| g.borrow_mut().take());
+                    let _ = SetCapture(hwnd);
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    return LRESULT(0);
+                }
                 with_ui(|ui| {
                     ui.finish_move(true);
                     ui.kfocus = None;
                 });
-                let (x, y) = xy(lp);
                 with_ui(|ui| {
                     ui.chrome.focus = None;
                     match hit_at(ui, x, y) {
@@ -4832,6 +4913,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 // stlacene tlacidlo hlavicky sa odoberie pred `ReleaseCapture` (ten posle `WM_CAPTURECHANGED`)
                 let pressed_btn = with_ui(|ui| ui.chrome.pressed.take()).flatten();
                 let _ = ReleaseCapture();
+                // pustenie posuvnika
+                if with_ui(|ui| ui.sbar.grab.take().is_some()).unwrap_or(false) {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    return LRESULT(0);
+                }
                 // uvolnenie tlacidla hlavicky: vykona sa, ak je mys stale nad nim
                 if let Some(b) = pressed_btn {
                     let mut rc = RECT::default();
@@ -5170,11 +5256,14 @@ fn make_ui(loaded: transom_config::Loaded, theme: Theme, windows_lang: String) -
         scroll: 0,
         max_scroll: 0,
         glide: Default::default(),
+        sbar: Default::default(),
         gliding: false,
         viewport: Rect::new(0, 0, 0, 0),
         repaint: false,
         art: None,
         monitors: Vec::new(),
+        scope: None,
+        swapped: [false; 2],
         form: DateForm::default(),
         date_rect: Rect::new(0, 0, 0, 0),
         date_scroll: 0,
@@ -5239,7 +5328,7 @@ fn config_message() -> u32 {
 }
 
 /// Poradie stranok a ich nazvy pre `--page` (rovnake nazvy ako `--shot --page`); index sa posiela druhej instancii.
-const PAGE_ORDER: [(Page, &str); 21] = [
+const PAGE_ORDER: [(Page, &str); 20] = [
     (Page::Layout, "layout"),
     (Page::Displays, "displays"),
     (Page::Media, "media"),
@@ -5247,7 +5336,6 @@ const PAGE_ORDER: [(Page, &str); 21] = [
     (Page::Clock, "clock"),
     (Page::Ai, "ai"),
     (Page::Sound, "sound"),
-    (Page::Audio, "audio"),
     (Page::Peripherals, "peripherals"),
     (Page::Tools, "tools"),
     (Page::Extras, "extras"),

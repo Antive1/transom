@@ -1,9 +1,9 @@
-//! Panel "Zvuk a rychle akcie" (popover): predvolene zariadenie, systemova hlasitost a stlmenie Windows, zoznam vystupov
-//! len na citanie, tlacidla na otvorenie natívnych povrchov Windows a skupina rychlych akcii.
+//! Panel "Zvuk" (popover): vyber vystupneho zariadenia, systemova hlasitost a stlmenie Windows, mixer aplikacii,
+//! profily, Bluetooth a tlacidlo nastaveni zvuku Windows.
 //!
-//! Poctivost voci pouzivatelovi: panel **nikdy netvrdi, ze sa vystup zmenil**. Windows 11 na zmenu predvoleneho vystupu
-//! nema podporovane verejne API, preto tlacidla vystup len otvoria v systeme; zmenu potvrdi az notifikacia Core Audio
-//! (`Snapshot::default_changes`). Rychle akcie "otvaraju povrch Windows"; co Windows urobi potom, transom nevie.
+//! Poctivost voci pouzivatelovi: panel **nikdy netvrdi, ze sa vystup zmenil**. Volba vystupu poziada Windows o zmenu
+//! (nedokumentovane `IPolicyConfig`, pozri `transom_audio`); zmenu potvrdi az notifikacia Core Audio
+//! (`Snapshot::default_changes`).
 //!
 //! Tento subor je cisty stav a kreslenie (bez Win32 okna): prikazy (`AudioCmd`) vykonava `App`, takze sa vsetko da
 //! testovat offscreen aj s falosnou snimkou stavu.
@@ -13,8 +13,8 @@ use transom_audio::{Availability, Device, DeviceState, Snapshot};
 use transom_i18n::{t, tf};
 use transom_mixer::{Route, Snapshot as MixSnap};
 use transom_platform::menu_access::{
-    MenuEntry, PageExtra, ROLE_CHECKBUTTON, ROLE_LISTITEM, ROLE_PUSHBUTTON, ROLE_SLIDER,
-    ROLE_STATICTEXT, STATE_CHECKED, STATE_OFFSCREEN, STATE_SELECTED,
+    MenuEntry, PageExtra, ROLE_CHECKBUTTON, ROLE_LISTITEM, ROLE_PUSHBUTTON, ROLE_RADIOBUTTON,
+    ROLE_SLIDER, ROLE_STATICTEXT, STATE_CHECKED, STATE_OFFSCREEN, STATE_SELECTED,
 };
 use transom_platform::PointerKind;
 use transom_render::{Color, Font, HAlign, Painter, Rect, TextStyle, Theme};
@@ -24,25 +24,14 @@ type Node = (Rect, String, PageExtra, bool, Option<AudioHit>);
 
 pub const AUDIO_W_LP: i32 = 340;
 pub const AUDIO_H_LP: i32 = 640;
-/// Najviac tolko zariadeni sa vypise (dalsie len poctom).
-const MAX_DEVICE_ROWS: usize = 4;
-
-/// Zobrazena rychla akcia: id v konfiguracii a kluc nazvu.
-pub const QUICK: [(&str, &str); 5] = [
-    ("quick_settings", "qa.quick_settings"),
-    ("notifications", "qa.notifications"),
-    ("search", "qa.search"),
-    ("tray", "qa.tray"),
-    ("settings", "qa.settings"),
-];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioHit {
     Mute,
     Slider,
-    Picker,
+    /// Volba vystupneho zariadenia (index v `Snapshot::devices`).
+    Output(u8),
     SoundSettings,
-    Quick(&'static str),
     /// Mixer: stlmenie, posuvnik a vyber vystupu aplikacie (kluc aplikacie).
     AppMute(u64),
     AppSlider(u64),
@@ -74,11 +63,10 @@ pub enum ProfMode {
 pub enum AudioCmd {
     SetVolume(u32),
     SetMute(bool),
-    /// Otvorit vyber vystupu Windows (`Win+Ctrl+V`).
-    Picker,
+    /// Predvoleny vystup na zariadenie s klucom (`Device::key`).
+    SetDefault(u64),
     /// Otvorit `ms-settings:sound`.
     SoundSettings,
-    Quick(&'static str),
     AppVolume(u64, u32),
     AppMute(u64, bool),
     /// `None` = predvoleny vystup, inak index do `MixSnap::devices`.
@@ -111,6 +99,8 @@ pub fn step_percent(cur: u32, vk: u32, shift: bool) -> Option<u32> {
 pub struct AudioPanel {
     /// Plynule posuvanie (snimka: `glide_step`).
     pub glide: transom_render::design::Glide,
+    /// Posuvnik, ktory sa da chytit a tahat mysou.
+    sbar: transom_render::design::ScrollBar,
 
     pub hover: Option<AudioHit>,
     pub focus: Option<AudioHit>,
@@ -184,15 +174,6 @@ fn device_name(d: &Device) -> String {
         t("audio.unnamed")
     } else {
         d.name.clone()
-    }
-}
-
-fn state_word(d: &Device) -> Option<String> {
-    match (d.is_default, d.state) {
-        (_, DeviceState::Disabled) => Some(t("audio.st_disabled")),
-        (_, DeviceState::Unplugged) => Some(t("audio.st_unplugged")),
-        (true, DeviceState::Active) => Some(t("audio.st_default")),
-        (false, DeviceState::Active) => None,
     }
 }
 
@@ -271,14 +252,8 @@ impl AudioPanel {
     }
 
     #[cfg(test)]
-    pub fn paint(
-        &mut self,
-        p: &mut dyn Painter,
-        th: &Theme,
-        snap: &Arc<Snapshot>,
-        quick: &[String],
-    ) {
-        self.paint_with(p, th, snap, quick, None, None);
+    pub fn paint(&mut self, p: &mut dyn Painter, th: &Theme, snap: &Arc<Snapshot>) {
+        self.paint_with(p, th, snap, None, None);
     }
 
     /// Kreslenie aj s mixerom aplikacii (`mix = None`: sekcia sa nekresli).
@@ -287,7 +262,6 @@ impl AudioPanel {
         p: &mut dyn Painter,
         th: &Theme,
         snap: &Arc<Snapshot>,
-        quick: &[String],
         mix: Option<Arc<MixSnap>>,
         icons: Option<&dyn IconSource>,
     ) {
@@ -332,22 +306,86 @@ impl AudioPanel {
         // karta Vystup: predvolene zariadenie, systemova hlasitost a stav
         y = card(p, th, pad, w, y, |p: &mut dyn Painter, pad, w, mut y| {
             p.draw_text(&t("audio.default_label"), Rect::new(pad, y, w, line), &lbl);
-            y += line;
-            let default_name = match snap.default_device() {
-                Some(d) => device_name(d),
-                None => t("audio.no_device"),
-            };
-            let dn = st(13.0, true, th.foreground, HAlign::Left);
-            let shown = fit(p, &default_name, &dn, w);
-            p.draw_text(&shown, Rect::new(pad, y, w, px(22)), &dn);
-            nodes.push((
-                Rect::new(pad, y - line, w, line + px(22)),
-                format!("{}: {default_name}", t("audio.default_label")),
-                static_extra(),
-                false,
-                None,
-            ));
-            y += px(32);
+            y += line + px(4);
+            // vystupy: aktivne zariadenia (a predvolene), klik = predvoleny vystup
+            let outs: Vec<(usize, &Device)> = snap
+                .devices
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.is_default || d.state == DeviceState::Active)
+                .collect();
+            if outs.is_empty() {
+                p.draw_text(
+                    &t("audio.no_device"),
+                    Rect::new(pad, y, w, px(22)),
+                    &st(12.0, false, th.muted, HAlign::Left),
+                );
+                nodes.push((
+                    Rect::new(pad, y, w, px(22)),
+                    t("audio.no_device"),
+                    static_extra(),
+                    false,
+                    None,
+                ));
+                y += px(26);
+            }
+            let rh = px(30);
+            let rad = px(transom_render::design::radius::CONTROL);
+            for (i, d) in outs {
+                let r = Rect::new(pad, y, w, rh);
+                let hit = AudioHit::Output(i as u8);
+                if d.is_default {
+                    p.fill_round_rect(r, rad, th.selected);
+                } else if self.hover == Some(hit) {
+                    p.fill_round_rect(r, rad, th.hover);
+                }
+                let c = Rect::new(r.x + px(8), r.y + rh / 2 - px(8), px(16), px(16));
+                p.stroke_round_rect(
+                    c,
+                    px(8),
+                    px(1).max(1),
+                    if d.is_default { th.accent } else { th.muted },
+                );
+                if d.is_default {
+                    p.fill_round_rect(
+                        Rect::new(c.x + px(4), c.y + px(4), px(8), px(8)),
+                        px(4),
+                        th.accent,
+                    );
+                }
+                let name = device_name(d);
+                let nm = st(12.0, d.is_default, th.foreground, HAlign::Left);
+                let text = fit(p, &name, &nm, w - px(40));
+                p.draw_text(&text, Rect::new(r.x + px(32), r.y, w - px(40), rh), &nm);
+                if self.focus == Some(hit) {
+                    transom_render::design::focus_ring(
+                        p,
+                        th,
+                        r,
+                        transom_render::design::radius::CONTROL,
+                        th.surface,
+                    );
+                }
+                self.hits.push((r, hit));
+                nodes.push((
+                    r,
+                    name,
+                    PageExtra {
+                        role: ROLE_RADIOBUTTON,
+                        state: if d.is_default { STATE_CHECKED } else { 0 },
+                        value: String::new(),
+                        action: if d.is_default {
+                            String::new()
+                        } else {
+                            t("acc.select")
+                        },
+                    },
+                    true,
+                    Some(hit),
+                ));
+                y += rh + px(2);
+            }
+            y += px(12);
 
             // systemova hlasitost (jasne oznacena; oddelena od zvukov rozhrania transom)
             let vl = t("audio.volume_label");
@@ -598,87 +636,8 @@ impl AudioPanel {
             ));
         };
 
-        // karta Zariadenia: zoznam vystupov (len na citanie) a tlacidla na nastavenia Windows
-        y = card(p, th, pad, w, y, |p: &mut dyn Painter, pad, w, mut y| {
-            p.draw_text(&t("audio.devices"), Rect::new(pad, y, w, line), &lbl);
-            y += line + px(2);
-            let rh = px(24);
-            for d in snap.devices.iter().take(MAX_DEVICE_ROWS) {
-                let r = Rect::new(pad, y, w, rh);
-                let active = d.state == DeviceState::Active;
-                let color = if active { th.foreground } else { th.muted };
-                let word = state_word(d);
-                let ww = word
-                    .as_ref()
-                    .map(|x| {
-                        p.measure_text(x, &st(11.0, false, th.muted, HAlign::Left))
-                            .w
-                            + px(8)
-                    })
-                    .unwrap_or(0);
-                if d.is_default {
-                    p.fill_round_rect(r, px(4), th.hover);
-                    p.fill_round_rect(
-                        Rect::new(r.x + px(5), r.y + rh / 2 - px(3), px(6), px(6)),
-                        px(3),
-                        th.accent,
-                    );
-                }
-                let nm = st(12.0, d.is_default, color, HAlign::Left);
-                let name = device_name(d);
-                let text = fit(p, &name, &nm, w - px(24) - ww);
-                p.draw_text(
-                    &text,
-                    Rect::new(r.x + px(18), r.y, w - px(18) - ww, rh),
-                    &nm,
-                );
-                if let Some(word) = &word {
-                    p.draw_text(
-                        word,
-                        Rect::new(r.x + r.w - ww, r.y, ww, rh),
-                        &st(11.0, false, th.muted, HAlign::Right),
-                    );
-                }
-                nodes.push((
-                    r,
-                    match &word {
-                        Some(wd) => tf("audio.acc_device", &[&name, wd]),
-                        None => name.clone(),
-                    },
-                    PageExtra {
-                        role: ROLE_LISTITEM,
-                        state: if d.is_default { STATE_SELECTED } else { 0 },
-                        value: String::new(),
-                        action: String::new(),
-                    },
-                    false,
-                    None,
-                ));
-                y += rh;
-            }
-            if snap.devices.len() > MAX_DEVICE_ROWS {
-                p.draw_text(
-                    &tf(
-                        "audio.more",
-                        &[&(snap.devices.len() - MAX_DEVICE_ROWS).to_string()],
-                    ),
-                    Rect::new(pad + px(18), y, w, line),
-                    &lbl,
-                );
-                y += line;
-            }
-            y += px(10);
-
-            button(
-                p,
-                self,
-                &mut nodes,
-                Rect::new(pad, y, w, bh),
-                &t("audio.picker"),
-                tf("qa.acc", &[&t("audio.picker")]),
-                AudioHit::Picker,
-            );
-            y += bh + px(6);
+        // nastavenia zvuku Windows (vsetky zariadenia, vstupy, rozsirene volby)
+        y = card(p, th, pad, w, y, |p: &mut dyn Painter, pad, w, y| {
             button(
                 p,
                 self,
@@ -688,76 +647,8 @@ impl AudioPanel {
                 tf("qa.acc", &[&t("audio.sound_settings")]),
                 AudioHit::SoundSettings,
             );
-            y += bh + px(6);
-            for l in transom_render::painter::wrap_text(p, &t("audio.picker_note"), &note_st, w)
-                .into_iter()
-                .take(5)
-            {
-                p.draw_text(&l, Rect::new(pad, y, w, line), &note_st);
-                y += line;
-            }
-            y
+            y + bh
         });
-
-        // rychle akcie: tlacidla v zalamovanom riadku
-        let chosen: Vec<(&'static str, &'static str)> = QUICK
-            .iter()
-            .filter(|(id, _)| quick.iter().any(|q| q == id))
-            .copied()
-            .collect();
-        if !chosen.is_empty() {
-            y = card(p, th, pad, w, y, |p: &mut dyn Painter, pad, w, mut y| {
-                p.draw_text(&t("qa.title"), Rect::new(pad, y, w, line), &lbl);
-                y += line + px(4);
-                let ch = px(30);
-                let gap = px(6);
-                let mut x = pad;
-                for (id, key) in chosen {
-                    let label = t(key);
-                    let bw = p
-                        .measure_text(&label, &st(12.0, false, th.foreground, HAlign::Center))
-                        .w
-                        + px(22);
-                    let bw = bw.min(w);
-                    if x > pad && x + bw > pad + w {
-                        x = pad;
-                        y += ch + gap;
-                    }
-                    let acc = if id == "settings" {
-                        tf("qa.acc_settings", &[&label])
-                    } else {
-                        tf("qa.acc", &[&label])
-                    };
-                    button(
-                        p,
-                        self,
-                        &mut nodes,
-                        Rect::new(x, y, bw, ch),
-                        &label,
-                        acc,
-                        AudioHit::Quick(id),
-                    );
-                    x += bw + gap;
-                }
-                y += ch + px(6);
-                let r0 = y;
-                for l in transom_render::painter::wrap_text(p, &t("qa.note"), &note_st, w)
-                    .into_iter()
-                    .take(4)
-                {
-                    p.draw_text(&l, Rect::new(pad, y, w, line), &note_st);
-                    y += line;
-                }
-                nodes.push((
-                    Rect::new(pad, r0, w, y - r0),
-                    t("qa.note"),
-                    static_extra(),
-                    false,
-                    None,
-                ));
-                y
-            });
-        }
 
         // hlaska po poslednej akcii (potvrdenie zmeny predvoleneho vystupu pride len z Core Audio)
         if let Some(m) = self.msg.clone() {
@@ -789,7 +680,7 @@ impl AudioPanel {
             self.repaint = true;
         }
         // posuvnik: len ked sa obsah da posuvat
-        transom_render::design::scroll_thumb(
+        self.sbar.paint(
             p,
             th,
             Rect::new(0, 0, sz.w, sz.h),
@@ -919,9 +810,12 @@ impl AudioPanel {
                 };
                 None
             }
-            AudioHit::Picker => Some(AudioCmd::Picker),
+            AudioHit::Output(i) => {
+                let d = snap.devices.get(usize::from(i))?;
+                (!d.is_default && d.state == DeviceState::Active)
+                    .then_some(AudioCmd::SetDefault(d.key))
+            }
             AudioHit::SoundSettings => Some(AudioCmd::SoundSettings),
-            AudioHit::Quick(id) => Some(AudioCmd::Quick(id)),
         }
     }
 
@@ -933,6 +827,16 @@ impl AudioPanel {
         y: i32,
         snap: &Snapshot,
     ) -> (Option<AudioCmd>, bool) {
+        if let Some(r) = crate::scroll_ptr(
+            &mut self.sbar,
+            kind,
+            (x, y),
+            &mut self.scroll,
+            self.max_scroll,
+            &mut self.glide,
+        ) {
+            return (None, r);
+        }
         let h = if kind == PointerKind::Leave {
             None
         } else {

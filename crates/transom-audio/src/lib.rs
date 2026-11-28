@@ -31,7 +31,8 @@ pub fn start_system(notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<Se
 
 #[cfg(test)]
 mod tests {
-    /// Tento crate nesmie siahat na zvukove relacie transom ani na zmenu predvoleneho vystupu (nedokumentovane API).
+    /// Tento crate nesmie siahat na zvukove relacie transom ani na streamy. Nedokumentovana zmena predvoleneho vystupu
+    /// (`IPolicyConfig`) je povolena **len** v `coreaudio.rs` (vyslovna volba pouzivatela v paneli Zvuk).
     #[test]
     fn the_crate_never_uses_sessions_streams_or_undocumented_default_device_apis() {
         for (name, src) in [
@@ -54,6 +55,10 @@ mod tests {
             ] {
                 // testy v tomto subore vyssie nie su v skenovanych retazcoch, preto staci hladat vsade okrem testov
                 let non_test = code.split("#[cfg(test)]").next().unwrap_or("");
+                let policy = bad.starts_with("IPolicy") || bad.starts_with("SetDefault");
+                if policy && name == "coreaudio.rs" {
+                    continue;
+                }
                 assert!(!non_test.contains(&bad), "{name} pouziva {bad}");
             }
         }

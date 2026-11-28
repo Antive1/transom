@@ -29,6 +29,10 @@ pub trait Backend {
     fn refresh(&mut self) -> Result<Refresh, AudioError>;
     fn set_volume(&mut self, percent: u8) -> Result<(), AudioError>;
     fn set_mute(&mut self, muted: bool) -> Result<(), AudioError>;
+    /// Nastavi predvoleny vystup (zariadenie `id`). Predvolene nepodporovane.
+    fn set_default(&mut self, _id: &str) -> Result<(), AudioError> {
+        Err(AudioError::Unsupported)
+    }
     /// Zrusi registracie a uvolni rozhrania (pred koncom vlakna; nikdy z callbacku).
     fn shutdown(&mut self);
 }
@@ -46,6 +50,7 @@ enum Msg {
     Event(Event),
     SetVolume(u8),
     SetMute(bool),
+    SetDefault(u64),
     Refresh,
     Quit,
 }
@@ -144,6 +149,12 @@ impl Service {
         let _ = self.tx.send(Msg::SetMute(muted));
     }
 
+    /// Nastavi predvoleny vystup na zariadenie s klucom `key` (`Device::key`). Neblokuje; potvrdenie pride ako
+    /// zmena snimky (notifikacia Windows).
+    pub fn set_default(&self, key: u64) {
+        let _ = self.tx.send(Msg::SetDefault(key));
+    }
+
     /// Znova nacita stav (napr. pri otvoreni panela: jedina cesta obnovy po strate sluzby bez pollingu).
     pub fn refresh(&self) {
         let _ = self.tx.send(Msg::Refresh);
@@ -164,6 +175,8 @@ struct State {
     snap: Snapshot,
     /// ID predvoleneho zariadenia z posledneho nacitania (len na detekciu zmeny; nikdy sa nezobrazuje).
     default_id: Option<String>,
+    /// ID zariadeni z posledneho nacitania (len na volbu predvoleneho vystupu podla kluca).
+    ids: Vec<String>,
 }
 
 fn publish(shared: &Shared, notify: &Arc<dyn Fn() + Send + Sync>, st: &mut State, new: Snapshot) {
@@ -205,6 +218,7 @@ fn apply_refresh(
                 new.default_changes += 1;
             }
             st.default_id = new_default;
+            st.ids = r.devices.iter().map(|d| d.id.clone()).collect();
             new.devices = display_devices(&r.devices);
             let has_active = new
                 .devices
@@ -248,6 +262,7 @@ fn worker(
     let mut st = State {
         snap: Snapshot::default(),
         default_id: None,
+        ids: Vec::new(),
     };
     let mut quit = false;
     // `self_tx` drzi frontu nazive; koniec riadi `Quit`
@@ -287,6 +302,19 @@ fn worker(
                             publish(&shared, &notify, &mut st, new);
                         }
                         Err(_) => pending.push(Msg::Refresh),
+                    }
+                }
+                Msg::SetDefault(key) => {
+                    let id = st
+                        .ids
+                        .iter()
+                        .find(|id| crate::model::key_of(id) == key)
+                        .cloned();
+                    if let Some(id) = id {
+                        bump(&shared, |c| c.writes += 1);
+                        let _ = backend.set_default(&id);
+                        // potvrdenie (aj zlyhanie) ukaze nove nacitanie zoznamu
+                        pending.push(Msg::Refresh);
                     }
                 }
                 Msg::Event(Event::Devices) | Msg::Refresh => {

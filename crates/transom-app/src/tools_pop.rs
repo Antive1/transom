@@ -216,6 +216,8 @@ pub struct ToolsPanel {
     tiles: Vec<(&'static str, Option<Section>)>,
     /// Plynule posuvanie (snimka: `glide_step`).
     pub glide: transom_render::design::Glide,
+    /// Posuvnik, ktory sa da chytit a tahat mysou.
+    sbar: transom_render::design::ScrollBar,
 
     pub section: Section,
     pub selected: usize,
@@ -273,6 +275,7 @@ impl Default for ToolsPanel {
     fn default() -> Self {
         ToolsPanel {
             glide: Default::default(),
+            sbar: Default::default(),
             tiles: Vec::new(),
             home: false,
             section: Section::Shelf,
@@ -960,7 +963,7 @@ impl ToolsPanel {
             self.repaint = true;
         }
         // posuvnik: len ked sa obsah da posuvat
-        transom_render::design::scroll_thumb(p, th, vp, self.scroll, self.max_scroll);
+        self.sbar.paint(p, th, vp, self.scroll, self.max_scroll);
         self.nodes = nodes
             .into_iter()
             .map(|(r, name, mut extra, enabled, hit)| {
@@ -1447,6 +1450,16 @@ impl ToolsPanel {
     /// Mys: vrati prikaz a to, ci treba prekreslit. Uvolnenie bez predchadzajuceho stlacenia (aktivacia cez MSAA
     /// `accDoDefaultAction` posiela len "klik") sa berie ako aktivacia prvku pod bodom.
     pub fn pointer(&mut self, kind: PointerKind, x: i32, y: i32) -> (Option<ToolsCmd>, bool) {
+        if let Some(r) = crate::scroll_ptr(
+            &mut self.sbar,
+            kind,
+            (x, y),
+            &mut self.scroll,
+            self.max_scroll,
+            &mut self.glide,
+        ) {
+            return (None, r);
+        }
         let h = if kind == PointerKind::Leave {
             None
         } else {

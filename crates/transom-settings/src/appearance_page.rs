@@ -57,6 +57,8 @@ thread_local! {
     /// Skutocna vyska kontrastu a poznamok z posledneho kreslenia (lp; dlhe preklady a poznamky priehladnosti su vyssie
     /// nez `INFO_H_LP`) - tlacidlo obnovenia ide pod ne.
     static INFO_H: std::cell::Cell<i32> = const { std::cell::Cell::new(INFO_H_LP) };
+    /// Vyska karty vyberu monitora z posledneho kreslenia (lp, aj s medzerou; 0 = bez vyberu): karty stranky su pod nou.
+    static SCOPE_H: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
 }
 
 pub(crate) fn layout(scale: f32, x0: i32, y0: i32, w: i32) -> AppLayout {
@@ -68,7 +70,7 @@ pub(crate) fn layout(scale: f32, x0: i32, y0: i32, w: i32) -> AppLayout {
     );
     let card = |top: i32, bottom: i32| Rect::new(x0 - pad_x, top, w + 2 * pad_x, bottom - top);
     // nadpis (PageTitle) + pomocny text (az tri riadky Secondary)
-    let mut y = y0 + px(44) + px(62);
+    let mut y = y0 + px(44) + px(62) + px(SCOPE_H.with(|c| c.get()));
     // karta 1: nahlad nad tmavou a svetlou plochou, predvolby, HEX / RGB a vyber farby
     let c1 = y;
     y += pad_y;
@@ -362,6 +364,15 @@ impl Ui {
 
         self.title(p, x0, y0, w, "app.title");
         self.paragraph(p, x0, y0 + px(44), w, &t("app.help"), 12.0, th.muted);
+        // vyber monitora pod pomocnym textom; karty stranky sa posunu o jeho vysku (pri zmene az pri dalsom kresleni)
+        {
+            let top = y0 + px(44) + px(62);
+            let end = self.paint_scope(p, x0, top, w);
+            let h = ((end - top) as f32 / s).ceil() as i32;
+            if SCOPE_H.with(|c| c.replace(h)) != h {
+                self.repaint = true;
+            }
+        }
         // karty sekcii z rozlozenia (spodok tretej podla skutocnej vysky poznamky - doplni sa nizsie)
         self.cards.extend_from_slice(&lay.cards[..2]);
 

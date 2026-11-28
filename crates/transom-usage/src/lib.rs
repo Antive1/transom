@@ -13,6 +13,7 @@
 //!
 //! Sukromie: obsah konverzacii sa neuklada ani neodosiela; do cache ([`cache`]) idu len denne suhrny podla
 //! poskytovatela a modelu (ziadne cesty, projekty, ID relacii ani uctov). `auth.json` sa nikdy neotvara.
+pub mod account;
 pub mod archive;
 
 /// Najvacsi zaznam (`*.jsonl`) lokalneho logu nastroja, ktory sa nacita: vacsi subor sa preskoci (pocita sa ako chyba),
@@ -40,6 +41,7 @@ pub mod cache;
 pub mod claude;
 pub mod claude_setup;
 pub mod codex;
+pub mod grok;
 pub mod history;
 #[cfg(test)]
 mod history_archive_tests;
@@ -55,17 +57,20 @@ use transom_core::clock::{days_from_civil, Ymd};
 pub enum Provider {
     ClaudeCode,
     Codex,
+    /// xAI Grok CLI (lokalne relacie `~/.grok/sessions`).
+    Grok,
 }
 
 impl Provider {
     /// Vsetci znami poskytovatelia v stabilnom poradi (poradie = priorita pri rovnosti, napr. pri `Auto`). Novy agent
     /// = dalsi variant + riadok tu + zdroj dat; ziadny plugin runtime.
-    pub const ALL: [Provider; 2] = [Provider::ClaudeCode, Provider::Codex];
+    pub const ALL: [Provider; 3] = [Provider::ClaudeCode, Provider::Codex, Provider::Grok];
 
     pub fn label(self) -> &'static str {
         match self {
             Provider::ClaudeCode => "Claude Code",
             Provider::Codex => "OpenAI Codex",
+            Provider::Grok => "Grok CLI",
         }
     }
 }
@@ -287,6 +292,8 @@ pub enum SourceKind {
     ClaudeStatusline,
     /// Lokalne relacie Codex (nezdokumentovana schema).
     CodexLocal,
+    /// Lokalne relacie Grok CLI (nezdokumentovany format).
+    GrokLocal,
 }
 
 /// Problem so zdrojom (text pre pouzivatela prekladá UI).
@@ -420,6 +427,7 @@ impl Collected {
 pub struct Sources {
     pub claude_dir: Option<std::path::PathBuf>,
     pub codex_dir: Option<std::path::PathBuf>,
+    pub grok_dir: Option<std::path::PathBuf>,
     pub statusline_file: Option<std::path::PathBuf>,
     /// Archiv dennych suctov (`None` = nepouziva sa).
     pub archive: Option<ArchiveSource>,
@@ -443,6 +451,7 @@ fn scans_of(statuses: &[SourceStatus], local_day: &dyn Fn(i64) -> Ymd) -> Vec<ar
             let provider = match st.kind {
                 SourceKind::ClaudeLocal => Provider::ClaudeCode,
                 SourceKind::CodexLocal => Provider::Codex,
+                SourceKind::GrokLocal => Provider::Grok,
                 SourceKind::ClaudeStatusline => return None,
             };
             Some(archive::Scan {
@@ -479,6 +488,15 @@ pub fn collect(src: &Sources, now: i64, local_day: &dyn Fn(i64) -> Ymd) -> Colle
         });
         out.plans.extend(plan);
     }
+    if let Some(d) = &src.grok_dir {
+        let (ev, st) = grok::read_dir(d);
+        events.extend(ev);
+        out.statuses.push(SourceStatus {
+            refreshed_at: now,
+            last_ok_at: if st.error.is_none() { now } else { 0 },
+            ..st
+        });
+    }
     if let Some(f) = &src.statusline_file {
         let (cost, st, plan, ctx) = statusline::read_file(f, local_day);
         out.statusline_cost_by_day = cost;
@@ -489,6 +507,28 @@ pub fn collect(src: &Sources, now: i64, local_day: &dyn Fn(i64) -> Ymd) -> Colle
             ..st
         });
         out.plans.extend(plan);
+    }
+    // Grok: plan len z prihlasenia (OIDC = SuperGrok); limity lokalne nie su
+    if src.grok_dir.is_some() {
+        if let Some(plan) = account::grok_account().0 {
+            out.plans.push(PlanSnapshot {
+                provider: Some(Provider::Grok),
+                plan,
+                windows: Vec::new(),
+                recorded_at: now,
+                source: SnapshotSource::default(),
+            });
+        }
+    }
+    // statusline nevie, ci ide o Pro alebo Max: skutocny plan uctu z lokalneho suboru Claude Code
+    if let Some(name) = account::claude_plan() {
+        for p in out
+            .plans
+            .iter_mut()
+            .filter(|p| p.provider == Some(Provider::ClaudeCode))
+        {
+            p.plan = name.clone();
+        }
     }
     out.days = by_day(&events, local_day);
     if let Some(ar) = &src.archive {

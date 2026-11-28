@@ -23,6 +23,7 @@ fn main() {
     let src = Sources {
         claude_dir: Some(home.join(".claude")),
         codex_dir: Some(home.join(".codex")),
+        grok_dir: None,
         statusline_file: None,
         // `--archive SUBOR`: zluci denne sucty do archivu v danom subore (overenie; skutocny archiv sa nepouzije)
         archive: args
