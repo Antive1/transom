@@ -8,13 +8,25 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-28
+
 ### Added
+- Different bar settings per display: in *Settings > Layout* and *Background* choose a display and give it its own items
+  and look, or keep the shared settings.
+- Audio panel: pick the output device right at the top of the panel.
+- Search finds files much faster: transom keeps its own index of file and folder names (Windows Search still adds the rest).
+- AI panel: your Claude plan (for example Max 5×) and the e-mail of each signed-in account, so several accounts are easy
+  to tell apart.
+- Grok CLI as a new AI source (token use from local sessions; off by default).
 - Colours panel: pick a colour anywhere on the screen with a real eyedropper cursor and a magnifier, see its HEX, RGB and
   HSL, copy it, and keep a history of the colours you picked.
 - Settings > Updates offers *Update now* as soon as the bar has found a new version.
 - Rain and snow on the bar: small falling drops or flakes under the cloud; sun and storm get their own icons.
 
 ### Changed
+- Scrollbars in Settings and in every panel can be grabbed and dragged with the mouse.
+- The audio panel no longer has quick actions (and their Settings page is gone).
+- While you drag a window the bar steps back, so Windows Snap Layouts at the top of the screen can be reached.
 - The battery is green while it charges and red below 20 %.
 - Glass in your own bar colour keeps the colour much better: a light colour gives light glass with dark text, and a dark
   colour no longer turns almost black.
@@ -22,6 +34,12 @@ Each release's section is copied into its GitHub release, and the bar shows it w
 - The colour picker no longer shows in the island; it opens the Colours panel.
 
 ### Fixed
+- Setting the volume to 0 % now really silences the output (some devices are still audible at their lowest level).
+- Dragging the volume slider quickly to the left stopped at a few percent instead of 0 %.
+- The island and panels showed a white line or briefly flashed while sliding open.
+- The island menu and the file drop area could show a different shade than the bar.
+- Files dragged from Explorer were not added to Stashed files after the update from an older version.
+- An icon dragged over a browser could stay stuck on the screen after dropping it on the bar.
 - Clicking an empty spot or another item on the bar now closes an open panel or island menu.
 - On some PCs the rounded corners of cards and buttons in Settings and panels showed as black wedges.
 - The bar no longer disappears while the colour picker is active.
